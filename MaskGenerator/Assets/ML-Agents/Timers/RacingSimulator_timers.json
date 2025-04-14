@@ -1,0 +1,81 @@
+{
+  "count": 1,
+  "self": 14.9848992,
+  "total": 22.701850999999998,
+  "children": {
+    "InitializeActuators": {
+      "count": 1,
+      "self": 0.0015049999999999998,
+      "total": 0.0015049999999999998,
+      "children": null
+    },
+    "InitializeSensors": {
+      "count": 1,
+      "self": 0.001521,
+      "total": 0.001521,
+      "children": null
+    },
+    "AgentSendState": {
+      "count": 941,
+      "self": 0.013448,
+      "total": 2.149682,
+      "children": {
+        "CollectObservations": {
+          "count": 941,
+          "self": 2.089668,
+          "total": 2.089668,
+          "children": null
+        },
+        "WriteActionMask": {
+          "count": 941,
+          "self": 0.0017809999999999998,
+          "total": 0.0017809999999999998,
+          "children": null
+        },
+        "RequestDecision": {
+          "count": 941,
+          "self": 0.015536,
+          "total": 0.044785,
+          "children": {
+            "AgentInfo.ToProto": {
+              "count": 941,
+              "self": 0.007617,
+              "total": 0.029248999999999997,
+              "children": {
+                "GenerateSensorData": {
+                  "count": 941,
+                  "self": 0.021632,
+                  "total": 0.021632,
+                  "children": null
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "DecideAction": {
+      "count": 941,
+      "self": 5.5586079999999995,
+      "total": 5.5586079999999995,
+      "children": null
+    },
+    "AgentAct": {
+      "count": 941,
+      "self": 0.004223,
+      "total": 0.004223,
+      "children": null
+    }
+  },
+  "gauges": {},
+  "metadata": {
+    "timer_format_version": "0.1.0",
+    "start_time_seconds": "1743083980",
+    "unity_version": "6000.0.34f1",
+    "command_line_arguments": "\/home\/quentin\/Unity\/Hub\/Editor\/6000.0.34f1\/Editor\/Unity -projectpath \/home\/quentin\/work\/RacingSimulator\/RacingSimulator -useHub -hubIPC -cloudEnvironment production",
+    "communication_protocol_version": "1.5.0",
+    "com.unity.ml-agents_version": "3.0.0",
+    "scene_name": "RacingSimulator",
+    "end_time_seconds": "1743084003"
+  }
+}

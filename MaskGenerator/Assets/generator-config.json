@@ -1,0 +1,9 @@
+{
+  "nbImage": 1000,
+  "rotationRange": 30,
+  "posZoneRadius": 5,
+  "cameraHeight": 2,
+  "cameraAngle": 10,
+  "maxBlurPercent": 50,
+  "blurQuantityPercent": 50
+}
