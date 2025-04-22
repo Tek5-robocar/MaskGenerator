@@ -27,7 +27,7 @@ public class LineRendererColliderGenerator : MonoBehaviour
             _outline = gameObject.AddComponent<Outline>();
             _outline.OutlineMode = Outline.Mode.SilhouetteOnly;
             _outline.OutlineColor = _lineColor;
-            _outline.OutlineWidth = 10f;
+            _outline.OutlineWidth = 1f;
         }
 
         OnStartFinished?.Invoke();

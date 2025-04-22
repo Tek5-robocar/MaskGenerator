@@ -39,7 +39,12 @@ public class ConfigLoader : MonoBehaviour
         public float posZoneRadius;
         public float cameraHeight;
         public float cameraAngle;
-        public float maxBlurPercent;
-        public float blurQuantityPercent;
+        public int blurQuantityPercent;
+        public int grainQuantityPercent;
+        public int colorGradientQuantityPercent;
+        public int shapeQuantityPercent;
+        public float maxShapeDensity;
+        public float lineWidthMultiplier;
+        public string versionDirectory;
     }
 }

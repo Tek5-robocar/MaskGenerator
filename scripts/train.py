@@ -232,18 +232,18 @@ def main():
 
 def testing(device, transform_img):
     TEST_IMAGES_DIR = "./../carpet/output_images_carpet"
-    MODEL_NAME = 'model_epoch_40'
+    MODEL_NAME = 'best_val_loss'
 
     dataset_test = TestDataset(TEST_IMAGES_DIR, transform_img=transform_img)
 
     model = UNet(in_channels=3, out_channels=1).to(device)
     if os.path.isfile(os.path.join('models', f'{MODEL_NAME}.pth')):
         model.load_state_dict(torch.load(os.path.join('models', f'{MODEL_NAME}.pth'), weights_only=True))
-    display_results(model=model, dataset=dataset_test, train=False, device=device, sample_count=10)
+    display_results(model=model, dataset=dataset_test, train=False, device=device, sample_count=15)
 
 
 def training(device, transform_img, transform_mask, num_workers):
-    version = '0.8'
+    version = '0.17'
     IMAGES_DIR = f"./../MaskGenerator/Dataset/{version}/Images"
     MASKS_DIR = f"./../MaskGenerator/Dataset/{version}/Masks"
 
@@ -276,6 +276,7 @@ def training(device, transform_img, transform_mask, num_workers):
 
     nb_epoch_no_amelioration = 0
     last_val_loss = None
+    best_val_loss_epoch = None
     for epoch in tqdm(range(EPOCHS)):
         model.train()
         train_running_loss = 0
@@ -331,7 +332,6 @@ def training(device, transform_img, transform_mask, num_workers):
         print("-" * 30)
         print(f"Training Loss EPOCH {epoch + 1}: {train_loss:.4f}")
         print(f"Training DICE EPOCH {epoch + 1}: {train_dc:.4f}")
-        print("\n")
         print(f"Validation Loss EPOCH {epoch + 1}: {val_loss:.4f}")
         print(f"Validation DICE EPOCH {epoch + 1}: {val_dc:.4f}")
         print("-" * 30)
@@ -340,6 +340,12 @@ def training(device, transform_img, transform_mask, num_workers):
             checkpoint_path = os.path.join("models", f"model_epoch_{epoch + 1}.pth")
             torch.save(model.state_dict(), checkpoint_path)
             print(f"Saved model checkpoint at: {checkpoint_path}")
+
+        if best_val_loss_epoch is None or best_val_loss_epoch > val_loss:
+            checkpoint_path = os.path.join("models", f"best_val_loss.pth")
+            torch.save(model.state_dict(), checkpoint_path)
+            print(f"Saved model checkpoint at: {checkpoint_path}")
+            best_val_loss_epoch = val_loss
 
         if last_val_loss is not None and last_val_loss <= val_loss:
             nb_epoch_no_amelioration += 1
@@ -386,9 +392,9 @@ def plot_training(epochs_list, train_losses, val_losses, train_dcs, val_dcs):
 
 if __name__ == '__main__':
     IMG_HEIGHT, IMG_WIDTH = 128, 256
-    BATCH_SIZE = 32
+    BATCH_SIZE = 8
     EPOCHS = 50
-    LEARNING_RATE = 1e-3
+    LEARNING_RATE = 1e-4
     EARLY_STOPPING_PATIENCE = 5
 
     torch.cuda.empty_cache()

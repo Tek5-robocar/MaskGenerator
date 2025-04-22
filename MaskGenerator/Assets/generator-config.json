@@ -1,9 +1,14 @@
 {
-  "nbImage": 1000,
-  "rotationRange": 30,
-  "posZoneRadius": 5,
+  "nbImage": 15000,
+  "rotationRange": 110,
+  "posZoneRadius": 7,
   "cameraHeight": 2,
   "cameraAngle": 10,
-  "maxBlurPercent": 50,
-  "blurQuantityPercent": 50
+  "blurQuantityPercent": 40,
+  "grainQuantityPercent": 50,
+  "colorGradientQuantityPercent": 60,
+  "shapeQuantityPercent": 40,
+  "maxShapeDensity": 0.3,
+  "lineWidthMultiplier": 0.1,
+  "versionDirectory": "0.17"
 }
