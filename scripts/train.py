@@ -1,7 +1,11 @@
 import glob
 import math
 import os
+import pickle
 import random
+import signal
+import sys
+import time
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -9,9 +13,13 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from PIL import Image
+from tabulate import tabulate
+from torch.nn.functional import pad
 from torch.utils.data import Dataset, DataLoader, random_split
 from torchvision import transforms
 from tqdm import tqdm
+
+# from scripts.UNet_3Plus import UNet_3Plus
 
 
 # Custom dataset for paired images and masks
@@ -66,7 +74,7 @@ class TestDataset(Dataset):
 
 # U-Net Model in PyTorch
 def double_conv(in_channels, out_channels):
-    # Two consecutive convolutional layers with ReLU activation and same padding.
+    #     Two consecutive convolutional layers with ReLU activation and same padding.
     return nn.Sequential(
         nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
         nn.ReLU(inplace=True),
@@ -107,6 +115,9 @@ class UNet(nn.Module):
         self.conv_last = nn.Conv2d(64, out_channels, kernel_size=1)
 
     def forward(self, x):
+        if x.size()[2] == 180:
+            x = pad(x, (0, 0, 6, 6))
+
         # Encoder
         c1 = self.enc1(x)
         p1 = self.pool1(c1)
@@ -148,6 +159,7 @@ class UNet(nn.Module):
 # After training, display sample predictions.
 def display_results(model, dataset, device, train, sample_count):
     model.eval()
+
     indices = random.sample(range(len(dataset)), sample_count)
     for idx in indices:
         img = dataset[idx]
@@ -156,7 +168,9 @@ def display_results(model, dataset, device, train, sample_count):
         # Add batch dimension and move to device
         img_input = img.unsqueeze(0).to(device)
         with torch.no_grad():
+            start = time.time()
             pred_mask = model(img_input)[0]
+            print(f'did inference in {time.time() - start}')
         # Convert tensor to numpy array and threshold the prediction
         pred_mask_np = pred_mask.cpu().numpy().squeeze()
         pred_mask_np = (pred_mask_np > 0.5).astype(np.float32)
@@ -166,7 +180,6 @@ def display_results(model, dataset, device, train, sample_count):
         if train:
             true_mask_np = true_mask.cpu().numpy().squeeze()
 
-        plt.figure(figsize=(12, 4))
         plt.subplot(1, 3, 1)
         plt.imshow(img_np)
         plt.title("Image")
@@ -199,10 +212,13 @@ def dice_coefficient(prediction, target, epsilon=1e-07):
     return dice
 
 
-def main():
-    train = False
-    test = True
+def save(path: str, values: [(str, [])], plot=False):
+    torch.save(model.state_dict(), path + '.pth')
+    print(f"Saved model checkpoint at: {path + '.pth'}")
+    plot_training(values, plot=plot)
 
+
+def main():
     transform_img = transforms.Compose([
         transforms.Resize((IMG_HEIGHT, IMG_WIDTH)),
         transforms.ToTensor(),
@@ -213,8 +229,10 @@ def main():
         transforms.ToTensor(),
     ])
 
-    if not os.path.exists("models"):
-        os.makedirs("models")
+    if not os.path.exists(MODELS_DIR):
+        os.makedirs(MODELS_DIR)
+    if not os.path.exists(os.path.join(MODELS_DIR, VERSION)):
+        os.makedirs(os.path.join(MODELS_DIR, VERSION))
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -223,34 +241,90 @@ def main():
     else:
         num_workers = 1
 
-    if train:
+    if TRAIN:
         training(device, transform_img, transform_mask, num_workers)
 
-    if test:
-        testing(device, transform_img)
+    if TEST:
+        testing(device, transform_img, transform_mask)
 
 
-def testing(device, transform_img):
-    TEST_IMAGES_DIR = "./../carpet/output_images_carpet"
-    MODEL_NAME = 'best_val_loss'
+def testing(device, transform_img, transform_mask):
+    TEST_IMAGES_DIR = "./../car_pictures/320_180"
+    IMAGES_DIR = f"./../MaskGenerator/Dataset/{VERSION}/Images"
+    MASKS_DIR = f"./../MaskGenerator/Dataset/{VERSION}/Masks"
 
+    dataset = SegmentationDataset(IMAGES_DIR, MASKS_DIR, transform_img=transform_img, transform_mask=transform_mask)
     dataset_test = TestDataset(TEST_IMAGES_DIR, transform_img=transform_img)
 
     model = UNet(in_channels=3, out_channels=1).to(device)
-    if os.path.isfile(os.path.join('models', f'{MODEL_NAME}.pth')):
-        model.load_state_dict(torch.load(os.path.join('models', f'{MODEL_NAME}.pth'), weights_only=True))
+    if os.path.isfile(os.path.join(MODELS_DIR, VERSION, f'{MODEL_NAME}.pth')):
+        model.load_state_dict(torch.load(os.path.join(MODELS_DIR, VERSION, f'{MODEL_NAME}.pth'), weights_only=True))
+    display_results(model=model, dataset=dataset, train=True, device=device, sample_count=5)
     display_results(model=model, dataset=dataset_test, train=False, device=device, sample_count=15)
 
 
+def pixel_accuracy(prediction, target):
+    """
+    Computes pixel accuracy between prediction and target masks.
+
+    Args:
+        prediction (torch.Tensor): Predicted mask (logits or probabilities).
+        target (torch.Tensor): Ground truth mask (binary or multi-class).
+
+    Returns:
+        float: Pixel accuracy in [0, 1].
+    """
+    # Convert to binary if needed (assuming binary segmentation)
+    if prediction.dtype != torch.bool:
+        pred_labels = (prediction > 0).float()  # threshold at 0 for logits
+    else:
+        pred_labels = prediction.float()
+
+    target_labels = target.float()
+
+    correct_pixels = torch.sum(pred_labels == target_labels)
+    total_pixels = torch.numel(target_labels)
+
+    accuracy = correct_pixels / total_pixels
+
+    return accuracy.item()  # return as Python float
+
+
+def iou_score(prediction, target, epsilon=1e-7):
+    """
+    Computes Intersection over Union (IoU) between prediction and target masks.
+
+    Args:
+        prediction (torch.Tensor): Predicted mask (logits or probabilities).
+        target (torch.Tensor): Ground truth mask (binary or multi-class).
+        epsilon (float): Small constant to avoid division by zero.
+
+    Returns:
+        float: IoU score in [0, 1].
+    """
+    # Binarize predictions (assuming binary segmentation)
+    pred_labels = (prediction > 0).float()
+    target_labels = target.float()
+
+    intersection = torch.sum(pred_labels * target_labels)
+    union = torch.sum(pred_labels) + torch.sum(target_labels) - intersection
+
+    iou = (intersection + epsilon) / (union + epsilon)
+
+    return iou.item()
+
+
 def training(device, transform_img, transform_mask, num_workers):
-    version = '0.17'
-    IMAGES_DIR = f"./../MaskGenerator/Dataset/{version}/Images"
-    MASKS_DIR = f"./../MaskGenerator/Dataset/{version}/Masks"
+    global model
+
+    IMAGES_DIR = f"./../MaskGenerator/Dataset/{VERSION}/Images"
+    MASKS_DIR = f"./../MaskGenerator/Dataset/{VERSION}/Masks"
 
     dataset = SegmentationDataset(IMAGES_DIR, MASKS_DIR, transform_img=transform_img, transform_mask=transform_mask)
 
     generator = torch.Generator().manual_seed(25)
-    train_dataset, val_dataset = random_split(dataset, [0.8, 0.2], generator=generator)
+    train_dataset, val_dataset = random_split(dataset, [int(len(dataset) * 0.8), int(len(dataset) * 0.2)], generator=generator)
+
 
     train_dataloader = DataLoader(dataset=train_dataset,
                                   num_workers=num_workers, pin_memory=False,
@@ -263,16 +337,28 @@ def training(device, transform_img, transform_mask, num_workers):
                                 shuffle=True)
 
     model = UNet(in_channels=3, out_channels=1).to(device)
+
+    if os.path.isfile(os.path.join(MODELS_DIR, VERSION, f'{MODEL_NAME}.pth')):
+        model.load_state_dict(torch.load(os.path.join(MODELS_DIR, VERSION, f'{MODEL_NAME}.pth'), weights_only=True))
+
     optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE)
     criterion = nn.BCEWithLogitsLoss().to(device=device)
     scaler = torch.amp.GradScaler('cuda')
 
     print(model)
 
+    signal.signal(signal.SIGINT, handle_interrupt)
+
     train_losses = []
     train_dcs = []
+    # train_dcs1 = []
+    train_ious = []
+    train_accs = []
     val_losses = []
     val_dcs = []
+    # val_dcs1 = []
+    val_ious = []
+    val_accs = []
 
     nb_epoch_no_amelioration = 0
     last_val_loss = None
@@ -281,10 +367,19 @@ def training(device, transform_img, transform_mask, num_workers):
         model.train()
         train_running_loss = 0
         train_running_dc = 0
+        # train_running_dc1 = 0
+        train_running_iou = 0
+        train_running_acc = 0
 
         for idx, img_mask in enumerate(tqdm(train_dataloader, position=0, leave=True)):
             img = img_mask[0].float().to(device)
             mask = img_mask[1].float().to(device)
+
+            if img.size()[2] == 180:
+                img = pad(img, (0, 0, 6, 6))
+
+            if mask.size()[2] == 180:
+                mask = pad(mask, (0, 0, 6, 6))
 
             optimizer.zero_grad()
 
@@ -292,59 +387,132 @@ def training(device, transform_img, transform_mask, num_workers):
                 y_pred = model(img)
 
                 dc = dice_coefficient(y_pred, mask)
+
+                # y_true_flat = mask.cpu().detach().numpy().flatten()
+                # y_true_flat = np.nan_to_num(y_true_flat)
+                # y_true_flat = np.clip(y_true_flat, 0, 255).astype(np.uint8)
+                # y_pred_flat = y_pred.cpu().detach().numpy().flatten()
+                # y_pred_flat = np.nan_to_num(y_pred_flat)
+                # y_pred_flat = np.clip(y_pred_flat, 0, 255).astype(np.uint8)
+                acc = pixel_accuracy(y_pred, mask)
+                iou = iou_score(y_pred, mask)
+                # dc1 = f1_score(y_true_flat, y_pred_flat)
+                # iou = jaccard_score(y_true_flat, y_pred_flat)
+                # acc = np.mean(y_true_flat == y_pred_flat)
                 loss = criterion(y_pred, mask)
 
             train_running_loss += loss.item()
             train_running_dc += dc.item()
+            # train_running_dc1 += dc1
+            train_running_iou += iou
+            train_running_acc += acc
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
 
         train_loss = train_running_loss / (idx + 1)
         train_dc = train_running_dc / (idx + 1)
+        # train_dc1 = train_running_dc1 / (idx + 1)
+        train_iou = train_running_iou / (idx + 1)
+        train_acc = train_running_acc / (idx + 1)
 
         train_losses.append(train_loss)
         train_dcs.append(train_dc)
+        # train_dcs1.append(train_dc1)
+        train_ious.append(train_iou)
+        train_accs.append(train_acc)
 
         model.eval()
         val_running_loss = 0
         val_running_dc = 0
+        # val_running_dc1 = 0
+        val_running_iou = 0
+        val_running_acc = 0
 
         with torch.no_grad():
             for idx, img_mask in enumerate(tqdm(val_dataloader, position=0, leave=True)):
                 img = img_mask[0].float().to(device)
                 mask = img_mask[1].float().to(device)
 
+                if img.size()[2] == 180:
+                    img = pad(img, (0, 0, 6, 6))
+
+                if mask.size()[2] == 180:
+                    mask = pad(mask, (0, 0, 6, 6))
+
                 with torch.amp.autocast('cuda'):
                     y_pred = model(img)
                     loss = criterion(y_pred, mask)
                     dc = dice_coefficient(y_pred, mask)
 
+                    # y_true_flat = mask.cpu().detach().numpy().flatten().astype(np.uint8)
+                    # y_pred_flat = y_pred.cpu().detach().numpy().flatten().astype(np.uint8)
+                    class_num = y_pred.size(1)
+                    acc = pixel_accuracy(y_pred, mask)
+                    iou = iou_score(y_pred, mask)
+                    # dc1 = f1_score(y_true_flat, y_pred_flat)
+                    # iou = jaccard_score(y_true_flat, y_pred_flat)
+                    # acc = np.mean(y_true_flat == y_pred_flat)
+
                 val_running_loss += loss.item()
                 val_running_dc += dc.item()
+                # val_running_dc1 += dc1
+                val_running_iou += iou
+                val_running_acc += acc
 
             val_loss = val_running_loss / (idx + 1)
             val_dc = val_running_dc / (idx + 1)
+            # val_dc1 = val_running_dc1 / (idx + 1)
+            val_iou = val_running_iou / (idx + 1)
+            val_acc = val_running_acc / (idx + 1)
 
         val_losses.append(val_loss)
         val_dcs.append(val_dc)
+        # val_dcs1.append(val_dc1)
+        val_ious.append(val_iou)
+        val_accs.append(val_acc)
 
-        print("-" * 30)
-        print(f"Training Loss EPOCH {epoch + 1}: {train_loss:.4f}")
-        print(f"Training DICE EPOCH {epoch + 1}: {train_dc:.4f}")
-        print(f"Validation Loss EPOCH {epoch + 1}: {val_loss:.4f}")
-        print(f"Validation DICE EPOCH {epoch + 1}: {val_dc:.4f}")
+        print("-" * 10 + f' EPOCH {epoch + 1} ' + "-" * 10)
+        data = [
+            ["", "train", "val"],
+            ["Loss", train_loss, val_loss],
+            ["DICE", train_dc, val_dc],
+            # ["DICE 1", train_dc1, val_dc1],
+            ["Intersection Over Union", train_iou, val_iou],
+            ["Pixel Accuracy", train_acc, val_acc],
+        ]
+        print(tabulate(data))
         print("-" * 30)
 
         if (epoch + 1) % 10 == 0:
-            checkpoint_path = os.path.join("models", f"model_epoch_{epoch + 1}.pth")
-            torch.save(model.state_dict(), checkpoint_path)
-            print(f"Saved model checkpoint at: {checkpoint_path}")
+            checkpoint_path = os.path.join(MODELS_DIR, VERSION, f"model_epoch_{epoch + 1}")
+            save(checkpoint_path, [
+                ('train loss', train_losses),
+                ('val loss', val_losses),
+                ('train dice', train_dcs),
+                ('val dice', val_dcs),
+                # ('train dice 1', train_dcs1),
+                # ('va dice 1', val_dcs1),
+                ('train intersection over union', train_ious),
+                ('val intersection over union', val_ious),
+                ('train accuracy', train_accs),
+                ('val accuracy', val_accs)
+            ])
 
         if best_val_loss_epoch is None or best_val_loss_epoch > val_loss:
-            checkpoint_path = os.path.join("models", f"best_val_loss.pth")
-            torch.save(model.state_dict(), checkpoint_path)
-            print(f"Saved model checkpoint at: {checkpoint_path}")
+            checkpoint_path = os.path.join(MODELS_DIR, VERSION, f"best_val_loss")
+            save(checkpoint_path, [
+                ('train loss', train_losses),
+                ('val loss', val_losses),
+                ('train dice', train_dcs),
+                ('val dice', val_dcs),
+                # ('train dice 1', train_dcs1),
+                # ('va dice 1', val_dcs1),
+                ('train intersection over union', train_ious),
+                ('val intersection over union', val_ious),
+                ('train accuracy', train_accs),
+                ('val accuracy', val_accs)
+            ])
             best_val_loss_epoch = val_loss
 
         if last_val_loss is not None and last_val_loss <= val_loss:
@@ -357,46 +525,80 @@ def training(device, transform_img, transform_mask, num_workers):
             break
 
         last_val_loss = val_loss
-    torch.save(model.state_dict(), os.path.join('models', 'final_model.pth'))
-    epochs_list = list(range(1, len(train_losses) + 1))
-    plot_training(epochs_list, train_losses, val_losses, train_dcs, val_dcs)
-    display_results(model=model, dataset=dataset, train=True, device=device, sample_count=3)
+    save(os.path.join(MODELS_DIR, VERSION, 'final_model'), [
+        ('train loss', train_losses),
+        ('val loss', val_losses),
+        ('train dice', train_dcs),
+        ('val dice', val_dcs),
+        # ('train dice 1', train_dcs1),
+        # ('va dice 1', val_dcs1),
+        ('train intersection over union', train_ious),
+        ('val intersection over union', val_ious),
+        ('train accuracy', train_accs),
+        ('val accuracy', val_accs)
+    ], True)
 
-def plot_training(epochs_list, train_losses, val_losses, train_dcs, val_dcs):
-    plt.figure(figsize=(12, 5))
-    plt.subplot(1, 2, 1)
-    plt.plot(epochs_list, train_losses, label='Training Loss')
-    plt.plot(epochs_list, val_losses, label='Validation Loss')
-    plt.xticks(ticks=list(range(1, EPOCHS + 1, 1)))
-    plt.title('Loss over epochs')
-    plt.xlabel('Epochs')
-    plt.ylabel('Loss')
 
-    plt.grid()
-    plt.tight_layout()
+def plot_training(values: [(str, [])], plot=False):
+    fig = plt.figure()
+    epochs_list = list(range(1, len(values[0][1]) + 1))
+    for i in range(len(values)):
+        # lines = []
+        line, = plt.plot(epochs_list, values[i][1], label=values[i][0])
 
-    plt.legend()
+    #     lines.append(line)
 
-    plt.subplot(1, 2, 2)
-    plt.plot(epochs_list, train_dcs, label='Training DICE')
-    plt.plot(epochs_list, val_dcs, label='Validation DICE')
-    plt.xticks(ticks=list(range(1, EPOCHS + 1, 1)))
-    plt.title('DICE Coefficient over epochs')
-    plt.xlabel('Epochs')
-    plt.ylabel('DICE')
-    plt.grid()
-    plt.legend()
+    # plt.grid()
+    # plt.legend()
 
-    plt.tight_layout()
-    plt.show()
+    # rax = plt.axes([0.02, 0.4, 0.15, 0.15])
+
+    # labels = [line.get_label() for line in lines]
+    # visibility = [line.get_visible() for line in lines]
+    # check = CheckButtons(rax, labels, visibility)
+
+    # check.on_clicked(lambda label: toggle_visibility(label, lines, labels))
+    plt.savefig(os.path.join(MODELS_DIR, VERSION, f'{MODEL_NAME}_plot.png'), dpi=300, bbox_inches='tight')
+    with open(os.path.join(MODELS_DIR, VERSION, f'{MODEL_NAME}_plot.plot'), 'wb') as f:
+        pickle.dump(fig, f)
+    if plot:
+        plt.show()
+    plt.close()
+
+
+def toggle_visibility(label, lines, labels):
+    index = labels.index(label)
+    lines[index].set_visible(not lines[index].get_visible())
+    plt.draw()
+
+
+def handle_interrupt(signal, frame):
+    print("\nTraining interrupted by user. Saving model as final_model...")
+    torch.save(model.state_dict(), os.path.join(MODELS_DIR, VERSION, 'final_model.pth'))
+    print("Model saved successfully.")
+    sys.exit(0)
+
 
 if __name__ == '__main__':
-    IMG_HEIGHT, IMG_WIDTH = 128, 256
-    BATCH_SIZE = 8
+    IMG_HEIGHT, IMG_WIDTH = 180, 320
+    BATCH_SIZE = 32
     EPOCHS = 50
     LEARNING_RATE = 1e-4
-    EARLY_STOPPING_PATIENCE = 5
+    EARLY_STOPPING_PATIENCE = 4
+    VERSION = '0.20'
+    MODEL_NAME = 'final_model'
+    MODELS_DIR = 'old_models'
+    TRAIN = False
+    TEST = True
+    eps = 1e-5
+    ignore = True
+    average = True
 
+    import gc
+    import gc
+
+    # del variables
+    # gc.collect()
     torch.cuda.empty_cache()
     main()
     torch.cuda.empty_cache()
