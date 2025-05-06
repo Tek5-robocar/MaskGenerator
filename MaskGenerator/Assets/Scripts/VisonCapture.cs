@@ -21,6 +21,7 @@ public class VisonCapture : MonoBehaviour
     public Shader outlineFillShader;
     public PostProcessVolume postProcessVolume;
     public Material roadMaterial;
+    public GenerationState generationState;
 
     private float _lenghtOffset;
     private float _totalLength = 0;
@@ -56,11 +57,6 @@ public class VisonCapture : MonoBehaviour
 
         _outlineList = tracks.GetComponentsInChildren<Outline>();
         _lineList = tracks.GetComponentsInChildren<LineRenderer>();
-        
-        foreach (LineRenderer lineRenderer in _lineList)
-        {
-            lineRenderer.widthMultiplier = configLoader.Config.lineWidthMultiplier;
-        }
 
         densityPropertyID = Shader.PropertyToID("_MaxDensity");
     }
@@ -143,8 +139,8 @@ public class VisonCapture : MonoBehaviour
         {
             _colorGrading.enabled.Override(true);
             _colorGrading.postExposure.Override(Random.Range(-5f, 5f));
-            _colorGrading.colorFilter.Override(new Color(Random.Range(0.85f, 1.0f), Random.Range(0.85f, 1.0f),
-                Random.Range(0.85f, 1.0f)));
+            _colorGrading.colorFilter.Override(new Color(Random.Range(0.8f, 1.0f), Random.Range(0.8f, 1.0f),
+                Random.Range(0.8f, 1.0f)));
         }
         
         if (Random.Range(0, 100) <= configLoader.Config.grainQuantityPercent)
@@ -164,6 +160,7 @@ public class VisonCapture : MonoBehaviour
         }
 
         SetRandomMaxDynamicShapesDensity();
+        SetLineRendererWidthMultiplier();
     }
 
     private void SetRandomMaxDynamicShapesDensity()
@@ -178,11 +175,28 @@ public class VisonCapture : MonoBehaviour
         }
     }
 
+    private void SetLineRendererWidthMultiplier()
+    {
+        foreach (LineRenderer lineRenderer in _lineList)
+        {
+            lineRenderer.widthMultiplier = Random.Range(configLoader.Config.lineWidthMultiplierRange.min, configLoader.Config.lineWidthMultiplierRange.max);
+        }
+    }
+    
+    private void UnsetLineRendererWidthMultiplier()
+    {
+        foreach (LineRenderer lineRenderer in _lineList)
+        {
+            lineRenderer.widthMultiplier = 0.5f;
+        }
+    }
+    
     private void UnsetPostProcessing()
     {
         _colorGrading.enabled.Override(false);
         _grain.enabled.Override(false);
         _motionBlur.enabled.Override(false);
+        UnsetLineRendererWidthMultiplier();
     }
 
     private void CaptureCamera(bool blackScreenState, string subPath)
@@ -233,16 +247,6 @@ public class VisonCapture : MonoBehaviour
         _camTexture.ReadPixels(_textureRect, 0, 0);
         _camTexture.Apply();
         
-        // if (!blackScreenState)
-        // {
-            // if (Random.Range(0, 100) <= configLoader.Config.blurQuantityPercent)
-            // {
-                // _camTexture = TextureBlurrer.BlurTexture(_camTexture, Random.Range(0, configLoader.Config.maxBlurPercent));
-            // }
-
-            // _camTexture.Apply();
-        // }
-        
         byte[] imageBytes = _camTexture.EncodeToPNG();
         File.WriteAllBytes(Path.Combine(_datasetDirectory,configLoader.Config.versionDirectory, subPath, $"{_posIndex}.png"), imageBytes);
     }
@@ -251,21 +255,7 @@ public class VisonCapture : MonoBehaviour
     {
         CaptureCamera(false, _imageDirectory);
         CaptureCamera(true, _maskDirectory);
-    }
-
-    private void SetLight()
-    {
-        // gameLight.transform.position = new Vector3(
-            // transform.position.x + Random.Range(-200f, 200f), 
-            // Random.Range(5f, 50f), 
-            // transform.position.z + Random.Range(-200f, 200f)
-        // );
-        // gameLight.transform.rotation = Quaternion.Euler(
-            // Random.Range(-15f, 20f), 
-            // Random.Range(0f, 360f), 
-            // 0f
-        // );
-        // gameLight.intensity = Random.Range(0f, configLoader.Config.lightMaxIntensity);
+        generationState.NbGeneration++;
     }
 
     private void Update()
@@ -305,7 +295,6 @@ public class VisonCapture : MonoBehaviour
                     if (lenght >= localLenght && lenght <= localLenght + trackLineRenderer.GetPosition(i).magnitude)
                     {
                         SetPosition(trackLineRenderer,  i, localLenght, lenght);
-                        // SetLight();
                         Capture();
                         return;
                     }

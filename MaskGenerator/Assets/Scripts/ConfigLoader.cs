@@ -32,6 +32,13 @@ public class ConfigLoader : MonoBehaviour
     }
 
     [System.Serializable]
+    public class Range
+    {
+        public float min;
+        public float max;
+    }
+    
+    [System.Serializable]
     public class ConfigData
     {
         public int nbImage;
@@ -44,7 +51,7 @@ public class ConfigLoader : MonoBehaviour
         public int colorGradientQuantityPercent;
         public int shapeQuantityPercent;
         public float maxShapeDensity;
-        public float lineWidthMultiplier;
+        public Range lineWidthMultiplierRange;
         public string versionDirectory;
     }
 }
