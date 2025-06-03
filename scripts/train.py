@@ -17,10 +17,13 @@ from torchvision import transforms
 from torchvision.transforms import Pad
 from tqdm import tqdm
 
+from EfficientLiteSeg import EfficientLiteSeg
 from Dataset import TrainingDataset, TestDataset
 # from UNet_3Plus import UNet_3Plus
 from evaluation import dice_coefficient, pixel_accuracy, iou_score
-from models.fast_scnn import FastSCNN
+
+
+# from models.fast_scnn import FastSCNN
 # from Unet import UNet
 # from scripts.PolyRegression import PolyRegression
 
@@ -110,10 +113,15 @@ def testing(device, transform_img, transform_mask):
     dataset_test = TestDataset(TEST_IMAGES_DIR, transform_img=transform_img)
 
     # model = PolyRegression(num_outputs=1, backbone='resnet34', pretrained=False).to(device)
-    model = FastSCNN(num_classes=1).to(device)
-    # model = UNet().to(device)
+    # model = FastSCNN(num_classes=1).to(device)
+    # model = UNet().to(device).half()
+    model = EfficientLiteSeg(in_channels=3, out_channels=1).to(device)
+    for param in model.parameters():
+        print(param.dtype)
     # model = UNet_3Plus(in_channels=3, n_classes=1).to(device)
+    print(f'Does model: {os.path.join(MODELS_DIR, VERSION, f"{MODEL_NAME}.pth")} exist ?')
     if os.path.isfile(os.path.join(MODELS_DIR, VERSION, f'{MODEL_NAME}.pth')):
+        print(f'Loading model: {os.path.join(MODELS_DIR, VERSION, f"{MODEL_NAME}.pth")}')
         model.load_state_dict(torch.load(os.path.join(MODELS_DIR, VERSION, f'{MODEL_NAME}.pth'), weights_only=True))
         print(f'Loaded model: {os.path.join(MODELS_DIR, VERSION, f"{MODEL_NAME}.pth")}')
     display_results(model=model, dataset=dataset, train=True, device=device, sample_count=5)
@@ -143,14 +151,14 @@ def training(device, transform_img, transform_mask, num_workers):
                                 shuffle=True)
 
     # model = PolyRegression(num_outputs=1, backbone='resnet34', pretrained=False).to(device)
-    model = FastSCNN(num_classes=1).to(device)
-    # model = UNet().to(device)
+    # model = FastSCNN(num_classes=1).to(device)
+    # model = UNet().to(device).half()
+    model = EfficientLiteSeg(in_channels=3, out_channels=1).to(device)
     # model = UNet_3Plus(in_channels=3, n_classes=1).to(device)
 
     if os.path.isfile(os.path.join(MODELS_DIR, VERSION, f'{MODEL_NAME}.pth')):
         model.load_state_dict(torch.load(os.path.join(MODELS_DIR, VERSION, f'{MODEL_NAME}.pth'), weights_only=True))
         print(f'Loaded model: {os.path.join(MODELS_DIR, VERSION, f"{MODEL_NAME}.pth")}')
-
 
     optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE)
     criterion = nn.BCEWithLogitsLoss().to(device=device)
@@ -187,21 +195,27 @@ def training(device, transform_img, transform_mask, num_workers):
 
             with torch.amp.autocast('cuda', dtype=torch.float16):
                 y_pred = model(img)
-                y_pred = y_pred[0]
+                # y_pred = y_pred[0]
 
                 dc = dice_coefficient(y_pred, mask)
 
                 acc = pixel_accuracy(y_pred, mask)
                 iou = iou_score(y_pred, mask)
                 loss = criterion(y_pred, mask)
+                # scale_factor = 65536.0  # Common scale for FP16
+                # loss = loss * scale_factor
+                # loss.backward()
+                # for param in model.parameters():
+                #     if param.grad is not None:
+                #         param.grad.data /= scale_factor
 
-            train_running_loss += loss.item()
-            train_running_dc += dc.item()
-            train_running_iou += iou
-            train_running_acc += acc
-            scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
+                train_running_loss += loss.item()
+                train_running_dc += dc.item()
+                train_running_iou += iou
+                train_running_acc += acc
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
 
         train_loss = train_running_loss / (idx + 1)
         train_dc = train_running_dc / (idx + 1)
@@ -224,9 +238,9 @@ def training(device, transform_img, transform_mask, num_workers):
                 img = img_mask[0].float().to(device)
                 mask = img_mask[1].float().to(device)
 
-                with torch.amp.autocast('cuda'):
+                with torch.amp.autocast('cuda', dtype=torch.float16):
                     y_pred = model(img)
-                    y_pred = y_pred[0]
+                    # y_pred = y_pred[0]
                     loss = criterion(y_pred, mask)
                     dc = dice_coefficient(y_pred, mask)
 
@@ -319,12 +333,6 @@ def plot_training(values: [(str, [])], plot=False):
     plt.grid()
     plt.legend()
 
-    # rax = plt.axes([0.02, 0.4, 0.15, 0.15])
-    # labels = [line.get_label() for line in lines]
-    # visibility = [line.get_visible() for line in lines]
-    # check = CheckButtons(rax, labels, visibility)
-    # check.on_clicked(lambda label: toggle_visibility(label, lines, labels))
-
     plt.savefig(os.path.join(MODELS_DIR, VERSION, f'{MODEL_NAME}_plot.png'), dpi=300, bbox_inches='tight')
     with open(os.path.join(MODELS_DIR, VERSION, f'{MODEL_NAME}_plot.plot'), 'wb') as f:
         pickle.dump(fig, f)
@@ -349,13 +357,13 @@ def handle_interrupt(signal, frame):
 if __name__ == '__main__':
     IMG_HEIGHT, IMG_WIDTH = 180, 320
     BATCH_SIZE = 32
-    EPOCHS = 30
-    LEARNING_RATE = 1e-4
+    EPOCHS = 2
+    LEARNING_RATE = 1e-5
     EARLY_STOPPING_PATIENCE = 4
     VERSION = '0.20'
     MODEL_NAME = 'final_model'
-    MODELS_DIR = 'models_fastSCNN'
-    TRAIN = True
+    MODELS_DIR = 'models_Unet_fp16'
+    TRAIN = False
     TEST = True
     eps = 1e-5
     ignore = True

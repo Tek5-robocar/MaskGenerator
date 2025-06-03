@@ -75,7 +75,7 @@ Material:
     - _GlossMapScale: 1
     - _Glossiness: 0
     - _GlossyReflections: 1
-    - _MaxDensity: 0.17359778
+    - _MaxDensity: 0
     - _MaxSize: 0.5
     - _Metallic: 0
     - _MinDensity: 10

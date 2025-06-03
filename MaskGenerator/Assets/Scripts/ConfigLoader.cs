@@ -44,8 +44,8 @@ public class ConfigLoader : MonoBehaviour
         public int nbImage;
         public float rotationRange;
         public float posZoneRadius;
-        public float cameraHeight;
-        public float cameraAngle;
+        public Range cameraHeightRange;
+        public Range cameraAngleRange;
         public int blurQuantityPercent;
         public int grainQuantityPercent;
         public int colorGradientQuantityPercent;
@@ -53,5 +53,6 @@ public class ConfigLoader : MonoBehaviour
         public float maxShapeDensity;
         public Range lineWidthMultiplierRange;
         public string versionDirectory;
+        public bool fixMaskLineWidth;
     }
 }

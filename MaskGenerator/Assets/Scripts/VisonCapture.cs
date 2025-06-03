@@ -26,10 +26,10 @@ public class VisonCapture : MonoBehaviour
     private float _lenghtOffset;
     private float _totalLength = 0;
     private int _posIndex = 0;
-    private string _imageDirectory = "Images";
-    private string _maskDirectory = "Masks";
-    private string _datasetDirectory = "Dataset";
-    private DateTime startTime;
+    private readonly string _imageDirectory = "Images";
+    private readonly string _maskDirectory = "Masks";
+    private readonly string _datasetDirectory = "Dataset";
+    private DateTime _startTime;
     private Texture2D _camTexture;
     private Rect _textureRect;
     private Outline[] _outlineList;
@@ -39,12 +39,16 @@ public class VisonCapture : MonoBehaviour
     private MotionBlur _motionBlur;
     private Grain _grain;
     
-    private int densityPropertyID;
+    private int _densityPropertyID;
+
+    private int _existingFiles = 0;
+    
+    private Color _colorGradingFilterColor = new Color(); 
 
     
     private void Start()
     {
-        startTime = DateTime.Now;
+        _startTime = DateTime.Now;
         for (int j = 0; j < tracks.transform.childCount; j++)
         {
             centralLine.SetTrack(tracks.transform.GetChild(j).gameObject);
@@ -58,7 +62,17 @@ public class VisonCapture : MonoBehaviour
         _outlineList = tracks.GetComponentsInChildren<Outline>();
         _lineList = tracks.GetComponentsInChildren<LineRenderer>();
 
-        densityPropertyID = Shader.PropertyToID("_MaxDensity");
+        _densityPropertyID = Shader.PropertyToID("_MaxDensity");
+
+        if (Directory.Exists(Path.Combine(_datasetDirectory, configLoader.Config.versionDirectory, _imageDirectory)) && Directory.Exists(Path.Combine(_datasetDirectory, configLoader.Config.versionDirectory, _maskDirectory)))
+        {
+            var imageDirInfo = new DirectoryInfo(Path.Combine(_datasetDirectory, configLoader.Config.versionDirectory, _imageDirectory));
+            var maskDirInfo = new DirectoryInfo(Path.Combine(_datasetDirectory, configLoader.Config.versionDirectory, _maskDirectory));
+            var images = imageDirInfo.GetFiles();
+            var masks = maskDirInfo.GetFiles();
+            _existingFiles = Math.Min(images.Length, masks.Length);
+            Debug.Log($"Will expand after the {_existingFiles} already existing pairs");
+        }
     }
     
     private void Init() 
@@ -108,7 +122,7 @@ public class VisonCapture : MonoBehaviour
         t = Mathf.Clamp01(t);
 
         Vector3 C = Vector3.Lerp(A, B, t);
-        C.y += configLoader.Config.cameraHeight;
+        C.y += Random.Range(configLoader.Config.cameraHeightRange.min, configLoader.Config.cameraHeightRange.max);
         C.x += Random.Range(-configLoader.Config.posZoneRadius, configLoader.Config.posZoneRadius);
         C.z += Random.Range(-configLoader.Config.posZoneRadius, configLoader.Config.posZoneRadius);
         transform.position = C;
@@ -128,7 +142,7 @@ public class VisonCapture : MonoBehaviour
         if (forwardDirection != Vector3.zero)
         {
             Quaternion lookRotation = Quaternion.LookRotation(forwardDirection);
-            Quaternion xRotation = Quaternion.Euler(configLoader.Config.cameraAngle, Random.Range(-configLoader.Config.rotationRange, configLoader.Config.rotationRange), 0f);
+            Quaternion xRotation = Quaternion.Euler(Random.Range(configLoader.Config.cameraAngleRange.min, configLoader.Config.cameraAngleRange.max), Random.Range(-configLoader.Config.rotationRange, configLoader.Config.rotationRange), 0f);
             transform.rotation = lookRotation * xRotation;
         }
     }
@@ -139,8 +153,10 @@ public class VisonCapture : MonoBehaviour
         {
             _colorGrading.enabled.Override(true);
             _colorGrading.postExposure.Override(Random.Range(-5f, 5f));
-            _colorGrading.colorFilter.Override(new Color(Random.Range(0.8f, 1.0f), Random.Range(0.8f, 1.0f),
-                Random.Range(0.8f, 1.0f)));
+            _colorGradingFilterColor.r = Random.Range(0.8f, 1.0f);
+            _colorGradingFilterColor.g = Random.Range(0.8f, 1.0f);
+            _colorGradingFilterColor.b = Random.Range(0.8f, 1.0f);
+            _colorGrading.colorFilter.Override(_colorGradingFilterColor);
         }
         
         if (Random.Range(0, 100) <= configLoader.Config.grainQuantityPercent)
@@ -167,11 +183,11 @@ public class VisonCapture : MonoBehaviour
     {
         if (Random.Range(0, 100) <= configLoader.Config.shapeQuantityPercent)
         {
-            roadMaterial.SetFloat(densityPropertyID, Random.Range(0f, configLoader.Config.maxShapeDensity));
+            roadMaterial.SetFloat(_densityPropertyID, Random.Range(0f, configLoader.Config.maxShapeDensity));
         }
         else
         {
-            roadMaterial.SetFloat(densityPropertyID, 0f);
+            roadMaterial.SetFloat(_densityPropertyID, 0f);
         }
     }
 
@@ -196,7 +212,10 @@ public class VisonCapture : MonoBehaviour
         _colorGrading.enabled.Override(false);
         _grain.enabled.Override(false);
         _motionBlur.enabled.Override(false);
-        UnsetLineRendererWidthMultiplier();
+        if (configLoader.Config.fixMaskLineWidth)
+        {
+            UnsetLineRendererWidthMultiplier();
+        }
     }
 
     private void CaptureCamera(bool blackScreenState, string subPath)
@@ -248,7 +267,7 @@ public class VisonCapture : MonoBehaviour
         _camTexture.Apply();
         
         byte[] imageBytes = _camTexture.EncodeToPNG();
-        File.WriteAllBytes(Path.Combine(_datasetDirectory,configLoader.Config.versionDirectory, subPath, $"{_posIndex}.png"), imageBytes);
+        File.WriteAllBytes(Path.Combine(_datasetDirectory,configLoader.Config.versionDirectory, subPath, $"{_posIndex + _existingFiles}.png"), imageBytes);
     }
 
     private void Capture()
@@ -263,7 +282,7 @@ public class VisonCapture : MonoBehaviour
         if (_posIndex >= configLoader.Config.nbImage)
         {
             #if UNITY_EDITOR
-            Debug.Log($"Finished in {DateTime.Now - startTime}");
+            Debug.Log($"Finished in {DateTime.Now - _startTime}");
             Process.Start(Path.Combine(_datasetDirectory, configLoader.Config.versionDirectory));
             EditorApplication.isPlaying = false;
             #endif

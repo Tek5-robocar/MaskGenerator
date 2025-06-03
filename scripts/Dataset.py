@@ -9,8 +9,8 @@ import torchvision.transforms.functional as F
 
 class TrainingDataset(Dataset):
     def __init__(self, images_dir, masks_dir, transform_img=None, transform_mask=None):
-        self.image_paths = sorted(glob.glob(os.path.join(images_dir, "*.png")))
-        self.mask_paths = sorted(glob.glob(os.path.join(masks_dir, "*.png")))
+        self.image_paths = sorted(glob.glob(os.path.join(images_dir, "*.png")) + glob.glob(os.path.join(images_dir, "*.jpg")))
+        self.mask_paths = sorted(glob.glob(os.path.join(masks_dir, "*.png")) + glob.glob(os.path.join(masks_dir, "*.jpg")))
         self.transform_img = transform_img
         self.transform_mask = transform_mask
 
@@ -50,7 +50,7 @@ class TrainingDataset(Dataset):
 
 class TestDataset(Dataset):
     def __init__(self, images_dir, transform_img=None):
-        self.image_paths = sorted(glob.glob(os.path.join(images_dir, "*.png")))
+        self.image_paths = sorted(glob.glob(os.path.join(images_dir, "*.png")) + glob.glob(os.path.join(images_dir, "*.jpg")))
         self.transform_img = transform_img
 
     def __len__(self):
