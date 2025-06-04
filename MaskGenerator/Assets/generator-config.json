@@ -1,0 +1,24 @@
+{
+  "nbImage": 10000,
+  "rotationRange": 100,
+  "posZoneRadius": 7,
+  "cameraHeightRange": {
+    "min": 2,
+    "max": 3
+  },
+  "cameraAngleRange": {
+    "min": 10,
+    "max": 50
+  },
+  "blurQuantityPercent": 80,
+  "grainQuantityPercent": 50,
+  "colorGradientQuantityPercent": 60,
+  "shapeQuantityPercent": 30,
+  "maxShapeDensity": 0.15,
+  "lineWidthMultiplierRange": {
+    "min": 0.05,
+    "max": 0.40
+  },
+  "versionDirectory": "0.32",
+  "fixMaskLineWidth": false
+}

@@ -1,404 +1,374 @@
 import os
-import re
-import glob
+import math
+import pickle
 import random
+import signal
+import sys
+import time
+
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+import torch.nn as nn
+import torch.optim as optim
+from tabulate import tabulate
+from torch.utils.data import DataLoader, random_split
+from torchvision import transforms
+from torchvision.transforms import Pad
 from tqdm import tqdm
-from torch import optim, nn
-from torch.utils.data import Dataset, random_split, DataLoader
-from torchvision.transforms import v2 as transforms
-from PIL import Image
-import gc
-gc.collect()
-torch.cuda.empty_cache()
+
+from EfficientLiteSeg import EfficientLiteSeg
+from Dataset import TrainingDataset, TestDataset
+# from UNet_3Plus import UNet_3Plus
+from evaluation import dice_coefficient, pixel_accuracy, iou_score
 
 
-WORKING_DIR = os.getcwd()
-image_directory = WORKING_DIR + "/Dataset/Images"
-mask_directory = WORKING_DIR + "/Dataset/Masks"
-SIZE = (128,256)
-LEARNING_RATE = 3e-4
-BATCH_SIZE = 32
-NUM_CLASS = 2
-EPOCHS = 0
-
-if (os.path.exists(WORKING_DIR + 'checkpoint') == False):
-    os.mkdir(WORKING_DIR + 'checkpoint')
-if (os.path.exists(WORKING_DIR + 'final') == False):
-    os.mkdir(WORKING_DIR + 'final')
-
-class SimDataset(Dataset):
-  def __init__(self, image_paths, mask_paths_left, mask_paths_right, transform_img=None, transform_mask=None):
-    self.image_paths = image_paths
-    self.mask_paths_left = mask_paths_left
-    self.mask_paths_right = mask_paths_right
-    self.transform_img = transform_img
-    self.transform_mask = transform_mask
-
-  def __len__(self):
-    return len(self.image_paths)
-
-  def __getitem__(self, idx):
-    img_path = self.image_paths[idx]
-    mask_path_left = self.mask_paths_left[idx]
-    mask_path_right = self.mask_paths_right[idx]
-
-    mask_left = Image.open(mask_path_left).convert("L") # convert("L") will convert the image to grayscale
-    mask_right = Image.open(mask_path_right).convert("L") # convert("L") will convert the image to grayscale
-    if self.transform_mask:
-        mask_left = self.transform_mask(mask_left)
-        mask_right = self.transform_mask(mask_right)
-        mask = torch.tensor(np.array([mask_left[0], mask_right[0]]))
-        mask[mask > 0.0] = 1
-
-    image = Image.open(img_path).convert("RGB") # we might not need to do this because the images are loaded as RGB by default
-    if self.transform_img:
-      image = self.transform_img(image)
-    return [image, mask]
-
-image_paths = sorted(glob.glob(os.path.join(image_directory, "*.png")), key=lambda x:float(re.findall("(\d+)",x)[-1]))
-mask_paths_left = sorted(glob.glob(os.path.join(mask_directory, "*-left.png")), key=lambda x:float(re.findall("(\d+)",x)[-1]))
-mask_paths_right = sorted(glob.glob(os.path.join(mask_directory, "*-right.png")), key=lambda x:float(re.findall("(\d+)",x)[-1]))
-assert len(mask_paths_left) == len(mask_paths_right), f"Amount of left and right mask is different {len(mask_paths_left)} != {len(mask_paths_right)}"
-assert len(image_paths) == len(mask_paths_left), f"Amount of images and label are different {len(image_paths)} != {len(mask_paths_left)}"
-dataset = SimDataset(image_paths,
-                     mask_paths_left,
-                     mask_paths_right,
-                     transforms.Compose([
-                                         transforms.Resize(SIZE),
-                                         transforms.ColorJitter(brightness=.5, hue=.3),
-                                         transforms.ToTensor()
-                                         #transforms.ToImage(),
-                                         #transforms.ToDtype(torch.float32, scale=True),
-                                         # transforms.Normalize(mean=[0.0],
-                                         #                      std=[1.0])
-                                                              ]),
-                     transforms.Compose([
-                                         transforms.Resize(SIZE),
-                                         transforms.ToTensor()
-                                         #transforms.ToImage(),
-                                         #transforms.ToDtype(torch.float32, scale=True),
-                                         # transforms.Normalize(mean=[0.0],
-                                         #                       std=[1.0])
-                                                              ]))
-generator = torch.Generator().manual_seed(25)
-train_dataset, test_dataset = random_split(dataset, [0.8, 0.2], generator=generator)
-test_dataset, val_dataset = random_split(test_dataset, [0.25, 0.75], generator=generator)
-
-class DoubleConv(nn.Module):
-    def __init__(self, in_channels, out_channels):
-        super().__init__()
-        self.conv_op = nn.Sequential(
-            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
-            nn.ReLU(inplace=True)
-        )
-
-    def forward(self, x):
-        return self.conv_op(x)
-
-class DownSample(nn.Module):
-    def __init__(self, in_channels, out_channels):
-        super().__init__()
-        self.conv = DoubleConv(in_channels, out_channels)
-        self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
-
-    def forward(self, x):
-        down = self.conv(x)
-        p = self.pool(down)
-
-        return down, p
-
-class UpSample(nn.Module):
-    def __init__(self, in_channels, out_channels):
-        super().__init__()
-        self.up = nn.ConvTranspose2d(in_channels, in_channels//2, kernel_size=2, stride=2)
-        self.conv = DoubleConv(in_channels, out_channels)
-
-    def forward(self, x1, x2):
-        x1 = self.up(x1)
-        x = torch.cat([x1, x2], 1)
-        return self.conv(x)
-
-class UNet(nn.Module):
-    def __init__(self, in_channels, num_classes):
-        super().__init__()
-        self.down_convolution_1 = DownSample(in_channels, 64)
-        self.down_convolution_2 = DownSample(64, 128)
-        self.down_convolution_3 = DownSample(128, 256)
-        self.down_convolution_4 = DownSample(256, 512)
-
-        self.bottle_neck = DoubleConv(512, 1024)
-
-        self.up_convolution_1 = UpSample(1024, 512)
-        self.up_convolution_2 = UpSample(512, 256)
-        self.up_convolution_3 = UpSample(256, 128)
-        self.up_convolution_4 = UpSample(128, 64)
-
-        self.out = nn.Conv2d(in_channels=64, out_channels=num_classes, kernel_size=1)
-
-    def forward(self, x):
-        down_1, p1 = self.down_convolution_1(x)
-        down_2, p2 = self.down_convolution_2(p1)
-        down_3, p3 = self.down_convolution_3(p2)
-        down_4, p4 = self.down_convolution_4(p3)
-
-        b = self.bottle_neck(p4)
-
-        up_1 = self.up_convolution_1(b, down_4)
-        up_2 = self.up_convolution_2(up_1, down_3)
-        up_3 = self.up_convolution_3(up_2, down_2)
-        up_4 = self.up_convolution_4(up_3, down_1)
-
-        out = self.out(up_4)
-        return out
+# from models.fast_scnn import FastSCNN
+# from Unet import UNet
+# from scripts.PolyRegression import PolyRegression
 
 
-torch.cuda.empty_cache()
-
-device = "cuda" if torch.cuda.is_available() else "cpu"
-
-if device == "cuda":
-    num_workers = torch.cuda.device_count() * 4
-else:
-    num_workers = 1
-
-train_dataloader = DataLoader(dataset=train_dataset,
-                              num_workers=num_workers, pin_memory=False,
-                              batch_size=BATCH_SIZE,
-                              shuffle=True)
-
-val_dataloader = DataLoader(dataset=val_dataset,
-                            num_workers=num_workers, pin_memory=False,
-                            batch_size=BATCH_SIZE,
-                            shuffle=True)
-
-test_dataloader = DataLoader(dataset=test_dataset,
-                             num_workers=num_workers, pin_memory=False,
-                             batch_size=BATCH_SIZE,
-                             shuffle=True)
-
-# model_pth = '/kaggle/working/final/final_epoch30.pth'
-
-model = UNet(in_channels=3, num_classes=NUM_CLASS).to(device)
-# model.load_state_dict(torch.load(model_pth,weights_only=True, map_location=torch.device(device)))
-optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE)
-criterion = nn.BCEWithLogitsLoss().to(device=device)
-scaler = torch.amp.GradScaler('cuda')
-
-def dice_coefficient(prediction, target, epsilon=1e-07):
-    prediction_copy = prediction.float().clone()
-    target = target.float()
-
-    prediction_copy[prediction_copy < 0] = 0
-    prediction_copy[prediction_copy > 0] = 1
-
-    intersection = abs(torch.sum(prediction_copy * target))
-    union = abs(torch.sum(prediction_copy) + torch.sum(target))
-    dice = (2. * intersection + epsilon) / (union + epsilon)
-
-    return dice
-
-
-torch.cuda.empty_cache()
-
-train_losses = []
-train_dcs = []
-val_losses = []
-val_dcs = []
-
-checkpoint_dir = "models"
-os.makedirs(checkpoint_dir, exist_ok=True)  
-
-for epoch in tqdm(range(EPOCHS)):
-    model.train()
-    train_running_loss = 0
-    train_running_dc = 0
-
-    for idx, img_mask in enumerate(tqdm(train_dataloader, position=0, leave=True)):
-        img = img_mask[0].float().to(device)
-        mask = img_mask[1].float().to(device)
-
-        optimizer.zero_grad()
-        
-        with torch.amp.autocast('cuda'):
-            y_pred = model(img)
-
-            dc = dice_coefficient(y_pred, mask)
-            loss = criterion(y_pred, mask)
-
-        train_running_loss += loss.item()
-        train_running_dc += dc.item()
-        scaler.scale(loss).backward()
-        scaler.step(optimizer)
-        scaler.update()
-
-    train_loss = train_running_loss / (idx + 1)
-    train_dc = train_running_dc / (idx + 1)
-
-    train_losses.append(train_loss)
-    train_dcs.append(train_dc)
-
+def display_results(model, dataset, device, train, sample_count):
     model.eval()
-    val_running_loss = 0
-    val_running_dc = 0
 
-    with torch.no_grad():
-        for idx, img_mask in enumerate(tqdm(val_dataloader, position=0, leave=True)):
+    indices = random.sample(range(len(dataset)), sample_count)
+    for idx in indices:
+        img = dataset[idx]
+        if train:
+            img, true_mask = dataset[idx]
+        img_input = img.unsqueeze(0).to(device)
+        with torch.no_grad():
+            start = time.time()
+            pred_mask = model(img_input)[0]
+            print(f'did inference in {time.time() - start}')
+        pred_mask_np = pred_mask.cpu().numpy().squeeze()
+        pred_mask_np = (pred_mask_np > 0.5).astype(np.float32)
+
+        img_np = img.permute(1, 2, 0).cpu().numpy()
+        if train:
+            true_mask_np = true_mask.cpu().numpy().squeeze()
+
+        plt.subplot(1, 3, 1)
+        plt.imshow(img_np)
+        plt.title("Image")
+        plt.axis("off")
+
+        if train:
+            plt.subplot(1, 3, 2)
+            plt.imshow(true_mask_np, cmap="gray")
+            plt.title("True Mask")
+            plt.axis("off")
+
+        plt.subplot(1, 3, 3)
+        plt.imshow(pred_mask_np, cmap="gray")
+        plt.title("Predicted Mask")
+        plt.axis("off")
+        plt.show()
+
+
+def save(path: str, values: [(str, [])], plot=False):
+    torch.save(model.state_dict(), path + '.pth')
+    print(f"Saved model checkpoint at: {path + '.pth'}")
+    plot_training(values, plot=plot)
+
+
+def main():
+    transform_img = transforms.Compose([
+        transforms.Resize((IMG_HEIGHT, IMG_WIDTH)),
+        Pad((0, 6, 0, 6)),
+        transforms.ToTensor(),
+    ])
+
+    transform_mask = transforms.Compose([
+        transforms.Resize((IMG_HEIGHT, IMG_WIDTH)),
+        Pad((0, 6, 0, 6)),
+        transforms.ToTensor(),
+    ])
+
+    if not os.path.exists(MODELS_DIR):
+        os.makedirs(MODELS_DIR)
+    if not os.path.exists(os.path.join(MODELS_DIR, VERSION)):
+        os.makedirs(os.path.join(MODELS_DIR, VERSION))
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    if device == "cuda":
+        num_workers = torch.cuda.device_count() * 4
+    else:
+        num_workers = 1
+
+    if TRAIN:
+        training(device, transform_img, transform_mask, num_workers)
+
+    if TEST:
+        testing(device, transform_img, transform_mask)
+
+
+def testing(device, transform_img, transform_mask):
+    TEST_IMAGES_DIR = "./../car_pictures/320_180"
+    IMAGES_DIR = f"./../MaskGenerator/Dataset/{VERSION}/Images"
+    MASKS_DIR = f"./../MaskGenerator/Dataset/{VERSION}/Masks"
+
+    dataset = TrainingDataset(IMAGES_DIR, MASKS_DIR, transform_img=transform_img, transform_mask=transform_mask)
+    dataset_test = TestDataset(TEST_IMAGES_DIR, transform_img=transform_img)
+
+    # model = PolyRegression(num_outputs=1, backbone='resnet34', pretrained=False).to(device)
+    # model = FastSCNN(num_classes=1).to(device)
+    # model = UNet().to(device).half()
+    model = EfficientLiteSeg(in_channels=3, out_channels=1).to(device)
+    for param in model.parameters():
+        print(param.dtype)
+    # model = UNet_3Plus(in_channels=3, n_classes=1).to(device)
+    print(f'Does model: {os.path.join(MODELS_DIR, VERSION, f"{MODEL_NAME}.pth")} exist ?')
+    if os.path.isfile(os.path.join(MODELS_DIR, VERSION, f'{MODEL_NAME}.pth')):
+        print(f'Loading model: {os.path.join(MODELS_DIR, VERSION, f"{MODEL_NAME}.pth")}')
+        model.load_state_dict(torch.load(os.path.join(MODELS_DIR, VERSION, f'{MODEL_NAME}.pth'), weights_only=True))
+        print(f'Loaded model: {os.path.join(MODELS_DIR, VERSION, f"{MODEL_NAME}.pth")}')
+    display_results(model=model, dataset=dataset, train=True, device=device, sample_count=5)
+    display_results(model=model, dataset=dataset_test, train=False, device=device, sample_count=15)
+
+
+def training(device, transform_img, transform_mask, num_workers):
+    global model
+
+    IMAGES_DIR = f"./../MaskGenerator/Dataset/{VERSION}/Images"
+    MASKS_DIR = f"./../MaskGenerator/Dataset/{VERSION}/Masks"
+
+    dataset = TrainingDataset(IMAGES_DIR, MASKS_DIR, transform_img=transform_img, transform_mask=transform_mask)
+
+    generator = torch.Generator().manual_seed(25)
+    train_dataset, val_dataset = random_split(dataset, [int(len(dataset) * 0.8), int(len(dataset) * 0.2)],
+                                              generator=generator)
+
+    train_dataloader = DataLoader(dataset=train_dataset,
+                                  num_workers=num_workers, pin_memory=False,
+                                  batch_size=BATCH_SIZE,
+                                  shuffle=True)
+
+    val_dataloader = DataLoader(dataset=val_dataset,
+                                num_workers=num_workers, pin_memory=False,
+                                batch_size=BATCH_SIZE,
+                                shuffle=True)
+
+    # model = PolyRegression(num_outputs=1, backbone='resnet34', pretrained=False).to(device)
+    # model = FastSCNN(num_classes=1).to(device)
+    # model = UNet().to(device).half()
+    model = EfficientLiteSeg(in_channels=3, out_channels=1).to(device)
+    # model = UNet_3Plus(in_channels=3, n_classes=1).to(device)
+
+    if os.path.isfile(os.path.join(MODELS_DIR, VERSION, f'{MODEL_NAME}.pth')):
+        model.load_state_dict(torch.load(os.path.join(MODELS_DIR, VERSION, f'{MODEL_NAME}.pth'), weights_only=True))
+        print(f'Loaded model: {os.path.join(MODELS_DIR, VERSION, f"{MODEL_NAME}.pth")}')
+
+    optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE)
+    criterion = nn.BCEWithLogitsLoss().to(device=device)
+    scaler = torch.amp.GradScaler('cuda')
+
+    print(model)
+
+    signal.signal(signal.SIGINT, handle_interrupt)
+
+    train_losses = []
+    train_dcs = []
+    train_ious = []
+    train_accs = []
+    val_losses = []
+    val_dcs = []
+    val_ious = []
+    val_accs = []
+
+    nb_epoch_no_amelioration = 0
+    last_val_loss = None
+    best_val_loss_epoch = None
+    for epoch in tqdm(range(EPOCHS)):
+        model.train()
+        train_running_loss = 0
+        train_running_dc = 0
+        train_running_iou = 0
+        train_running_acc = 0
+
+        for idx, img_mask in enumerate(tqdm(train_dataloader, position=0, leave=True)):
             img = img_mask[0].float().to(device)
             mask = img_mask[1].float().to(device)
 
-            with torch.amp.autocast('cuda'):
+            optimizer.zero_grad()
+
+            with torch.amp.autocast('cuda', dtype=torch.float16):
                 y_pred = model(img)
-                loss = criterion(y_pred, mask)
+                # y_pred = y_pred[0]
+
                 dc = dice_coefficient(y_pred, mask)
 
-            val_running_loss += loss.item()
-            val_running_dc += dc.item()
+                acc = pixel_accuracy(y_pred, mask)
+                iou = iou_score(y_pred, mask)
+                loss = criterion(y_pred, mask)
+                # scale_factor = 65536.0  # Common scale for FP16
+                # loss = loss * scale_factor
+                # loss.backward()
+                # for param in model.parameters():
+                #     if param.grad is not None:
+                #         param.grad.data /= scale_factor
 
-        val_loss = val_running_loss / (idx + 1)
-        val_dc = val_running_dc / (idx + 1)
+                train_running_loss += loss.item()
+                train_running_dc += dc.item()
+                train_running_iou += iou
+                train_running_acc += acc
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
 
-    val_losses.append(val_loss)
-    val_dcs.append(val_dc)
+        train_loss = train_running_loss / (idx + 1)
+        train_dc = train_running_dc / (idx + 1)
+        train_iou = train_running_iou / (idx + 1)
+        train_acc = train_running_acc / (idx + 1)
 
-    print("-" * 30)
-    print(f"Training Loss EPOCH {epoch + 1}: {train_loss:.4f}")
-    print(f"Training DICE EPOCH {epoch + 1}: {train_dc:.4f}")
-    print("\n")
-    print(f"Validation Loss EPOCH {epoch + 1}: {val_loss:.4f}")
-    print(f"Validation DICE EPOCH {epoch + 1}: {val_dc:.4f}")
-    print("-" * 30)
-    if (epoch > 9 and epoch % 10 == 0):
-        torch.save(model.state_dict(), f"models/checkpoint_epoch{epoch}.pth")
+        train_losses.append(train_loss)
+        train_dcs.append(train_dc)
+        train_ious.append(train_iou)
+        train_accs.append(train_acc)
 
-# Saving the model
-print("save")
-torch.save(model.state_dict(), f'models/final_epoch{EPOCHS}_fp16.pth')
+        model.eval()
+        val_running_loss = 0
+        val_running_dc = 0
+        val_running_iou = 0
+        val_running_acc = 0
 
-epochs_list = list(range(1, EPOCHS + 1))
+        with torch.no_grad():
+            for idx, img_mask in enumerate(tqdm(val_dataloader, position=0, leave=True)):
+                img = img_mask[0].float().to(device)
+                mask = img_mask[1].float().to(device)
 
-plt.figure(figsize=(12, 5))
-plt.subplot(1, 2, 1)
-plt.plot(epochs_list, train_losses, label='Training Loss')
-plt.plot(epochs_list, val_losses, label='Validation Loss')
-plt.xticks(ticks=list(range(1, EPOCHS + 1, 1))) 
-plt.title('Loss over epochs')
-plt.xlabel('Epochs')
-plt.ylabel('Loss')
+                with torch.amp.autocast('cuda', dtype=torch.float16):
+                    y_pred = model(img)
+                    # y_pred = y_pred[0]
+                    loss = criterion(y_pred, mask)
+                    dc = dice_coefficient(y_pred, mask)
 
-plt.grid()
-plt.tight_layout()
+                    acc = pixel_accuracy(y_pred, mask)
+                    iou = iou_score(y_pred, mask)
 
-plt.legend()
+                val_running_loss += loss.item()
+                val_running_dc += dc.item()
+                val_running_iou += iou
+                val_running_acc += acc
+
+            val_loss = val_running_loss / (idx + 1)
+            val_dc = val_running_dc / (idx + 1)
+            val_iou = val_running_iou / (idx + 1)
+            val_acc = val_running_acc / (idx + 1)
+
+        val_losses.append(val_loss)
+        val_dcs.append(val_dc)
+        val_ious.append(val_iou)
+        val_accs.append(val_acc)
+
+        print("-" * 10 + f' EPOCH {epoch + 1} ' + "-" * 10)
+        data = [
+            ["", "train", "val"],
+            ["Loss", train_loss, val_loss],
+            ["DICE", train_dc, val_dc],
+            ["Intersection Over Union", train_iou, val_iou],
+            ["Pixel Accuracy", train_acc, val_acc],
+        ]
+        print(tabulate(data))
+        print("-" * 30)
+
+        if (epoch + 1) % 10 == 0:
+            checkpoint_path = os.path.join(MODELS_DIR, VERSION, f"model_epoch_{epoch + 1}")
+            save(checkpoint_path, [
+                ('train loss', train_losses),
+                ('val loss', val_losses),
+                ('train dice', train_dcs),
+                ('val dice', val_dcs),
+                ('train intersection over union', train_ious),
+                ('val intersection over union', val_ious),
+                ('train accuracy', train_accs),
+                ('val accuracy', val_accs)
+            ])
+
+        if best_val_loss_epoch is None or best_val_loss_epoch > val_loss:
+            checkpoint_path = os.path.join(MODELS_DIR, VERSION, f"best_val_loss")
+            save(checkpoint_path, [
+                ('train loss', train_losses),
+                ('val loss', val_losses),
+                ('train dice', train_dcs),
+                ('val dice', val_dcs),
+                ('train intersection over union', train_ious),
+                ('val intersection over union', val_ious),
+                ('train accuracy', train_accs),
+                ('val accuracy', val_accs)
+            ])
+            best_val_loss_epoch = val_loss
+
+        if last_val_loss is not None and last_val_loss <= val_loss:
+            nb_epoch_no_amelioration += 1
+        else:
+            nb_epoch_no_amelioration = 0
+
+        if nb_epoch_no_amelioration >= EARLY_STOPPING_PATIENCE or math.isnan(train_loss) or math.isnan(val_loss):
+            print(f'Early stop after {epoch}')
+            break
+
+        last_val_loss = val_loss
+    save(os.path.join(MODELS_DIR, VERSION, 'final_model'), [
+        ('train loss', train_losses),
+        ('val loss', val_losses),
+        ('train dice', train_dcs),
+        ('val dice', val_dcs),
+        ('train intersection over union', train_ious),
+        ('val intersection over union', val_ious),
+        ('train accuracy', train_accs),
+        ('val accuracy', val_accs)
+    ], True)
 
 
-plt.subplot(1, 2, 2)
-plt.plot(epochs_list, train_dcs, label='Training DICE')
-plt.plot(epochs_list, val_dcs, label='Validation DICE')
-plt.xticks(ticks=list(range(1, EPOCHS + 1, 1)))  
-plt.title('DICE Coefficient over epochs')
-plt.xlabel('Epochs')
-plt.ylabel('DICE')
-plt.grid()
-plt.legend()
+def plot_training(values: [(str, [])], plot=False):
+    fig = plt.figure()
+    epochs_list = list(range(1, len(values[0][1]) + 1))
+    for i in range(len(values)):
+        lines = []
+        line, = plt.plot(epochs_list, values[i][1], label=values[i][0])
+        lines.append(line)
 
-plt.tight_layout()
-plt.show()
+    plt.grid()
+    plt.legend()
 
-model_pth = WORKING_DIR + '/models/final_epoch30_fp16.pth'
-trained_model = UNet(in_channels=3, num_classes=NUM_CLASS).half().to(device)
-trained_model.load_state_dict(torch.load(model_pth,weights_only=True, map_location=torch.device(device)))
-
-for name, param in trained_model.named_parameters():
-    print(f"{name}: {param.dtype}")
-
-test_running_loss = 0
-test_running_dc = 0
-
-with torch.no_grad():
-    for idx, img_mask in enumerate(tqdm(test_dataloader, position=0, leave=True)):
-        img = img_mask[0].float().half().to(device)
-        mask = img_mask[1].float().half().to(device)
-
-        y_pred = trained_model(img)
-        loss = criterion(y_pred, mask)
-        dc = dice_coefficient(y_pred, mask)
-
-        test_running_loss += loss.item()
-        test_running_dc += dc.item()
-
-    test_loss = test_running_loss / (idx + 1)
-    test_dc = test_running_dc / (idx + 1)
-print(f"{test_loss=}")
-print(f"{test_dc=}")
-
-def random_images_inference(image_tensors, mask_tensors, model_pth, device):
-    model = UNet(in_channels=3, num_classes=NUM_CLASS).half().to(device)
-    model.load_state_dict(torch.load(model_pth, weights_only=True, map_location=torch.device(device)))
-
-    transform = transforms.Compose([
-        transforms.Resize(SIZE)
-    ])
-
-    # Iterate for the images, masks and paths
-    for image_pth, mask_pth in zip(image_tensors, mask_tensors):
-        # Load the image
-        #img = image_pth
-        img = transform(image_pth)
-        
-        # Predict the imagen with the model
-        pred_mask = model(img.unsqueeze(0).float().half().to(device))
-        pred_mask = pred_mask.squeeze(0) 
-        pred_mask = pred_mask.permute(1,2,0)
-        
-        # Load the mask to compare
-#        mask = transform(mask_pth).permute(1, 2, 0).to(device)
-        mask = mask_pth.permute(1, 2, 0).cpu().detach()
-        mask = mask.permute(2, 0, 1)
-        merged_mask = mask[0] + mask[1]
-        
-        # Show the images
-        img = img.cpu().detach().permute(1, 2, 0)
-        pred_mask = pred_mask.cpu().detach()
-        pred_mask = pred_mask.permute(2,0,1)
-        pred_mask[0] = torch.sigmoid(pred_mask[0]) > 0.5
-        pred_mask[1] = torch.sigmoid(pred_mask[1]) > 0.5
-        merged_pred_mask = pred_mask[0] + pred_mask[1]
-
-    
-        plt.figure(figsize=(16, 4))
-        plt.subplot(2,4,1), plt.imshow(img), plt.title("original"), plt.axis("off")
-        plt.subplot(2,4,2), plt.imshow(pred_mask[0], cmap="gray"), plt.title("predicted left"), plt.axis("off")
-        plt.subplot(2,4,3), plt.imshow(pred_mask[1], cmap="gray"), plt.title("predicted right"), plt.axis("off")
-        plt.subplot(2,4,4), plt.imshow(merged_pred_mask, cmap="gray"), plt.title("predicted merged"), plt.axis("off")
-        
-        plt.subplot(2,4,6), plt.imshow(mask[0], cmap="gray"), plt.title("mask left"), plt.axis("off")
-        plt.subplot(2,4,7), plt.imshow(mask[1], cmap="gray"), plt.title("mask right"), plt.axis("off")
-        plt.subplot(2,4,8), plt.imshow(merged_mask, cmap="gray"), plt.title("mask merged"), plt.axis("off")
+    plt.savefig(os.path.join(MODELS_DIR, VERSION, f'{MODEL_NAME}_plot.png'), dpi=300, bbox_inches='tight')
+    with open(os.path.join(MODELS_DIR, VERSION, f'{MODEL_NAME}_plot.plot'), 'wb') as f:
+        pickle.dump(fig, f)
+    if plot:
         plt.show()
-
-n = 20
-
-image_tensors = []
-mask_tensors = []
-image_paths = []
-
-for _ in range(n):
-    random_index = random.randint(0, len(test_dataloader.dataset) - 1)
-    random_sample = test_dataloader.dataset[random_index]
-
-    image_tensors.append(random_sample[0])  
-    mask_tensors.append(random_sample[1])
-
-model_path =  WORKING_DIR + '/models/final_epoch30_fp16.pth'
-
-random_images_inference(image_tensors, mask_tensors, model_path, device="cuda")
+    plt.close()
 
 
+def toggle_visibility(label, lines, labels):
+    index = labels.index(label)
+    lines[index].set_visible(not lines[index].get_visible())
+    plt.draw()
 
 
-#resize nearest neighbor pour les mask
+def handle_interrupt(signal, frame):
+    print("\nTraining interrupted by user. Saving model as final_model...")
+    torch.save(model.state_dict(), os.path.join(MODELS_DIR, VERSION, 'final_model.pth'))
+    print("Model saved successfully.")
+    sys.exit(0)
+
+
+if __name__ == '__main__':
+    IMG_HEIGHT, IMG_WIDTH = 180, 320
+    BATCH_SIZE = 32
+    EPOCHS = 2
+    LEARNING_RATE = 1e-5
+    EARLY_STOPPING_PATIENCE = 4
+    VERSION = '0.20'
+    MODEL_NAME = 'final_model'
+    MODELS_DIR = 'models_Unet_fp16'
+    TRAIN = False
+    TEST = True
+    eps = 1e-5
+    ignore = True
+    average = True
+
+    torch.cuda.empty_cache()
+    main()
+    torch.cuda.empty_cache()
