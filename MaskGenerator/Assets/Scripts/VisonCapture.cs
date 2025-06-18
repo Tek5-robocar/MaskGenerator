@@ -4,7 +4,6 @@ using System.IO;
 using UnityEditor;
 using UnityEngine;
 using Debug = UnityEngine.Debug;
-using File = UnityEngine.Windows.File;
 using Random = UnityEngine.Random;
 using UnityEngine.Rendering.PostProcessing;
 using MotionBlur = UnityEngine.Rendering.PostProcessing.MotionBlur;
@@ -162,7 +161,14 @@ public class VisonCapture : MonoBehaviour
         if (Random.Range(0, 100) <= configLoader.Config.grainQuantityPercent)
         {
             _grain.enabled.Override(true);
-            _grain.colored.Override(false);
+            if (Random.Range(0, 100) <= configLoader.Config.coloredGrainPercent)
+            {
+                _grain.colored.Override(true);
+            }
+            else
+            {
+                _grain.colored.Override(false);
+            }
             _grain.intensity.Override(Random.Range(0f, 1f));
             _grain.size.Override(Random.Range(0.3f, 3f));
             _grain.lumContrib.Override(Random.Range(0f, 1f));
@@ -203,7 +209,7 @@ public class VisonCapture : MonoBehaviour
     {
         foreach (LineRenderer lineRenderer in _lineList)
         {
-            lineRenderer.widthMultiplier = 0.5f;
+            lineRenderer.widthMultiplier = configLoader.Config.fixMaskLineWidth;
         }
     }
     
@@ -212,7 +218,7 @@ public class VisonCapture : MonoBehaviour
         _colorGrading.enabled.Override(false);
         _grain.enabled.Override(false);
         _motionBlur.enabled.Override(false);
-        if (configLoader.Config.fixMaskLineWidth)
+        if (configLoader.Config.fixMaskLineWidth > 0f)
         {
             UnsetLineRendererWidthMultiplier();
         }
@@ -283,6 +289,8 @@ public class VisonCapture : MonoBehaviour
         {
             #if UNITY_EDITOR
             Debug.Log($"Finished in {DateTime.Now - _startTime}");
+            int configNumber = Directory.GetFiles(Path.Combine(_datasetDirectory, configLoader.Config.versionDirectory)).Length;
+            File.WriteAllText(Path.Combine(_datasetDirectory,configLoader.Config.versionDirectory, $"finished_config_{configNumber}.json"), JsonUtility.ToJson(configLoader.Config));
             Process.Start(Path.Combine(_datasetDirectory, configLoader.Config.versionDirectory));
             EditorApplication.isPlaying = false;
             #endif
