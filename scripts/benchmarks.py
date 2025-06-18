@@ -44,14 +44,10 @@ def get_closest_points(contour1, contour2):
     return closest_pt1, closest_pt2, min_dist
 
 
-
-
-
 def get_two_closest_contours(target_contour, all_contours):
     if len(all_contours) < 3:
         raise ValueError("Need at least 3 contours to find two closest (excluding target)")
 
-    # Initialize with infinity
     first_dist = second_dist = float('inf')
     first_closest = second_closest = None
     first_points = second_points = (None, None)
@@ -59,7 +55,6 @@ def get_two_closest_contours(target_contour, all_contours):
     target_flat = target_contour.reshape(-1, 2)
 
     for contour in all_contours:
-        # Skip the target contour
         if np.array_equal(contour, target_contour):
             continue
 
@@ -100,38 +95,49 @@ def clean_mask(mask):
     for i in range(len(contours) - 1):
         pt1 = tuple(contours[i][0, 0])
         try:
-            first_closest, first_dist, first_points, second_closest, second_dist, second_points = get_two_closest_contours(contours[i], contours)
+            first_closest, first_dist, first_points, second_closest, second_dist, second_points = get_two_closest_contours(
+                contours[i], contours)
         except ValueError:
             return mask, mask
-        cv2.line(output, pt1, first_points[1], (255, 255, 255), 2)  # Red line (BGR format)
-        cv2.line(output, pt1, second_points[1], (255, 255, 255), 2)  # Red line (BGR format)
+        cv2.line(output, pt1, first_points[1], (255, 255, 255), 2)
+        cv2.line(output, pt1, second_points[1], (255, 255, 255), 2)
 
-    output = cv2.cvtColor(output, cv2.COLOR_RGB2GRAY)  # Shape: (H, W), 0-255
-    pred = (mask * 255).astype(np.uint8)  # Ensure pred is 0-255
-    merged = cv2.bitwise_or(pred, output)  # White = pred OR output
-
+    output = cv2.cvtColor(output, cv2.COLOR_RGB2GRAY)
+    pred = (mask * 255).astype(np.uint8)
+    merged = cv2.bitwise_or(pred, output)
     return output, merged
+
+
+def overlay_mask_on_image(image, mask):
+    image_rgb = image.copy()
+    if len(image_rgb.shape) == 2 or image_rgb.shape[2] == 1:
+        image_rgb = cv2.cvtColor(image_rgb, cv2.COLOR_GRAY2RGB)
+
+    mask = (mask * 255).astype(np.uint8)
+    if len(mask.shape) > 2:
+        mask = mask.squeeze()
+
+    # Directly replace masked pixels with pure red
+    overlaid_image = image_rgb.copy()
+    overlaid_image[mask == 255] = [255, 0, 0]  # Fully opaque red
+
+    return overlaid_image
 
 
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f'Using device: {device}')
 
-    # Create output directory if it doesn't exist
     output_dir = 'benchmark_results'
     os.makedirs(output_dir, exist_ok=True)
 
     models = [
-        # ('fastSCNN', FastSCNN(num_classes=1).to(device)),
-        # ('UNet_3Plus', UNet_3Plus(in_channels=3, n_classes=1).to(device)),
         ('Unet', UNet(in_channels=3, out_channels=1).to(device)),
-        # ('Unet_fp16', UNet(in_channels=3, out_channels=1).to(device).half()),
-        # ('EfficientLiteSeg', EfficientLiteSeg(in_channels=3, out_channels=1).to(device)),
+        ('EfficientLiteSeg', EfficientLiteSeg(in_channels=3, out_channels=1).to(device)),
     ]
 
     transform_img = transforms.Compose([
         transforms.Resize((IMG_HEIGHT, IMG_WIDTH)),
-        Pad((0, 6, 0, 6)),
         transforms.ToTensor(),
     ])
 
@@ -143,27 +149,28 @@ def main():
             image = dataset_test[indice]
             img_input = image.unsqueeze(0).to(device)
 
-            # Count total number of predictions (one per model version)
-            total_preds = sum(len(os.listdir(f'models_{model_dir_name}')) for model_dir_name, _ in models) * 2
-            # Calculate rows and columns for a square-like grid
-            rows = math.ceil(math.sqrt(total_preds * 3 + 1))
-            cols = math.ceil((total_preds * 3 + 1) / rows)
-            # Create a grid of subplots
-            fig, axes = plt.subplots(nrows=rows, ncols=cols, sharex=True, sharey=True,
-                                     figsize=(3 * cols, 3 * rows))  # Scale figure size with grid
+            img_np = image.permute(1, 2, 0).cpu().numpy()
+            img_np = (img_np * 255).clip(0, 255).astype(np.uint8)
 
-            # Flatten axes for consistent indexing
-            axes = axes.flat if rows * cols > 1 else [axes]
+            total_preds = sum(len(os.listdir(f'models_{model_dir_name}')) for model_dir_name, _ in models)
+            rows = math.ceil(math.sqrt(total_preds))
+            cols = math.ceil(total_preds / rows)
+            fig, axes = plt.subplots(nrows=rows, ncols=cols, sharex=True, sharey=True,
+                                     figsize=(3 * cols, 3 * rows))
+
+            axes = axes.flatten() if rows * cols > 1 else [axes]
 
             idx = 0
             for model_dir_name, model in models:
+                total_params = sum(
+                    param.numel() for param in model.parameters()
+                )
+                print(f'Total params of {model_dir_name}: {total_params}, memory needed = {total_params * (2 if next(model.parameters()).dtype == torch.float16 else 4)}')
                 for version in os.listdir(f'models_{model_dir_name}'):
-                    model_name = os.path.join(f'models_{model_dir_name}', version, 'final_model.pth')
-                    print(model_name)
+                    model_name = os.path.join(f'models_{model_dir_name}', version, 'best_val_loss.pth')
                     model.load_state_dict(torch.load(model_name, map_location=device))
                     model.eval()
                     with torch.no_grad():
-                        # Synchronize GPU before starting the timer
                         if device.type == "cuda":
                             torch.cuda.synchronize()
                             start_event = torch.cuda.Event(enable_timing=True)
@@ -177,62 +184,43 @@ def main():
                         else:
                             pred = model(img_input)[0]
 
-                        # Synchronize and stop the timer
                         if device.type == "cuda":
                             end_event.record()
                             torch.cuda.synchronize()
-                            elapsed_time = start_event.elapsed_time(end_event) / 1000.0  # Convert to seconds
+                            elapsed_time = start_event.elapsed_time(end_event) / 1000.0
                         else:
-                            end = time.time()
-                            elapsed_time = end - start
+                            elapsed_time = time.time() - start
 
                     pred = pred.cpu().numpy().squeeze()
                     pred = (pred > 0.5).astype(np.float32)
-                    axes[idx].imshow(pred, cmap='gray', aspect='equal')
-                    # Set title with increased padding to avoid clipping
+
+                    overlaid_image = overlay_mask_on_image(img_np, pred)
+
+                    axes[idx].imshow(overlaid_image, aspect='equal')
                     axes[idx].set_title(f'{"_".join(model_name.split("/")[:2])} in {elapsed_time:0.6f}s',
                                         fontsize=TITLE_FONT_SIZE, pad=20, wrap=True, color='blue')
                     axes[idx].axis('off')
+
+                    individual_path = os.path.join(output_dir,
+                                                   f'overlay_{model_dir_name}_{version}_{sub_dir}_{indice}.png')
+                    cv2.imwrite(individual_path, cv2.cvtColor(overlaid_image, cv2.COLOR_RGB2BGR))
+
                     idx += 1
 
-                    clean_pred, merged = clean_mask(pred)
-                    axes[idx].imshow(clean_pred, cmap='gray', aspect='equal')
-                    # Set title with increased padding to avoid clipping
-                    axes[idx].set_title(f'clean_{"_".join(model_name.split("/")[:2])}', fontsize=TITLE_FONT_SIZE,
-                                        pad=20, wrap=True, color='red')
-                    axes[idx].axis('off')
-                    idx += 1
-
-                    axes[idx].imshow(merged, cmap='gray', aspect='equal')
-                    # Set title with increased padding to avoid clipping
-                    axes[idx].set_title(f'merged_{"_".join(model_name.split("/")[:2])}', fontsize=TITLE_FONT_SIZE,
-                                        pad=20, wrap=True, color='green')
-                    axes[idx].axis('off')
-                    idx += 1
-
-            img_np = image.permute(1, 2, 0).cpu().numpy()
-            axes[idx].imshow(img_np, aspect='equal')
-            axes[idx].set_title('Original', fontsize=TITLE_FONT_SIZE, pad=20, wrap=True)
-            axes[idx].axis('off')
-
-            # Hide any unused subplots
-            for i in range(idx + 1, len(axes)):
+            for i in range(idx, len(axes)):
                 axes[i].axis('off')
 
-            # Adjust layout with increased vertical spacing and adjusted margins
-            plt.tight_layout(h_pad=12.0)  # Kept doubled vertical padding
-            plt.subplots_adjust(left=0.05, right=0.95, top=0.97, bottom=0.02)  # Adjusted margins
-            # Save plot to output directory with high resolution
-            output_path = os.path.join(output_dir, f'output_{sub_dir}_{indice}.png')
+            plt.tight_layout(h_pad=12.0)
+            plt.subplots_adjust(left=0.05, right=0.95, top=0.97, bottom=0.02)
+            output_path = os.path.join(output_dir, f'grid_output_{sub_dir}_{indice}.png')
             plt.savefig(output_path, dpi=300, bbox_inches='tight')
-            # Display the plot (non-scrollable)
             plt.show()
             plt.close(fig)
 
 
 if __name__ == '__main__':
-    TITLE_FONT_SIZE = 8  # Kept for visibility
-    IMG_HEIGHT, IMG_WIDTH = 180, 320
+    TITLE_FONT_SIZE = 8
+    IMG_HEIGHT, IMG_WIDTH = 256, 256
     DIR = '../car_pictures'
     SUB_DIRS = [
         '256_128',
@@ -244,6 +232,6 @@ if __name__ == '__main__':
         'UTAC_morning',
         'UTAC_morning2'
     ]
-    NB_IMAGES_PER_DIRS = 3
+    NB_IMAGES_PER_DIRS = 10
 
     main()
