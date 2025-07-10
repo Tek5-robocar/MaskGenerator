@@ -132,6 +132,7 @@ GameObject:
   - component: {fileID: 36493076}
   - component: {fileID: 36493077}
   - component: {fileID: 36493078}
+  - component: {fileID: 36493079}
   m_Layer: 0
   m_Name: Vision
   m_TagString: Untagged
@@ -180,7 +181,7 @@ Camera:
     serializedVersion: 2
     m_Bits: 4294967295
   m_RenderingPath: -1
-  m_TargetTexture: {fileID: 8400000, guid: a2f4c9200b8402f53a0facf69fa3524f, type: 2}
+  m_TargetTexture: {fileID: 0}
   m_TargetDisplay: 0
   m_TargetEye: 3
   m_HDR: 1
@@ -229,6 +230,7 @@ MonoBehaviour:
   postProcessVolume: {fileID: 575254075}
   roadMaterial: {fileID: 2100000, guid: b5bc8f3403dc1ce46a81986467de7656, type: 2}
   generationState: {fileID: 1153775090}
+  raycastImageGenerator: {fileID: 36493079}
 --- !u!114 &36493077
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -301,6 +303,21 @@ MonoBehaviour:
   m_BeforeTransparentBundles: []
   m_BeforeStackBundles: []
   m_AfterStackBundles: []
+--- !u!114 &36493079
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 36493073}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 13688a1390334d8fa414a22275b5e0df, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  mainCamera: {fileID: 36493074}
+  targetsLineRendererParent: {fileID: 403523007}
+  lineThickness: 0.01
 --- !u!1001 &145551752
 PrefabInstance:
   m_ObjectHideFlags: 0

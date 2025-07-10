@@ -1,24 +1,28 @@
 {
-  "nbImage": 10000,
-  "rotationRange": 100,
-  "posZoneRadius": 7,
+  "nbImage": 1000,
+  "rotationRange": 70,
+  "imageWidth": 256,
+  "imageHeight": 256,
+  "posZoneRadius": 0,
   "cameraHeightRange": {
     "min": 2,
     "max": 3
   },
   "cameraAngleRange": {
-    "min": 10,
-    "max": 50
+    "min": 20,
+    "max": 30
   },
-  "blurQuantityPercent": 80,
-  "grainQuantityPercent": 50,
-  "colorGradientQuantityPercent": 60,
-  "shapeQuantityPercent": 30,
-  "maxShapeDensity": 0.15,
+  "blurQuantityPercent": 0,
+  "grainQuantityPercent": 0,
+  "coloredGrainQuantityPercent": 0,
+  "colorGradientQuantityPercent": 0,
+  "shapeQuantityPercent": 0,
+  "maxShapeDensity": 0,
   "lineWidthMultiplierRange": {
-    "min": 0.05,
-    "max": 0.40
+    "min": 0.1,
+    "max": 0.8
   },
-  "versionDirectory": "0.32",
-  "fixMaskLineWidth": false
+  "versionDirectory": "0.51",
+  "fixMaskLineWidth": false,
+  "maxLineHoleRadius": 6
 }

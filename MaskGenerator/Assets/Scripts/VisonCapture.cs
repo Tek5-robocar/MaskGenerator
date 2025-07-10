@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using UnityEditor;
@@ -55,7 +56,8 @@ public class VisonCapture : MonoBehaviour
         }
         
         Init();
-
+        RenderTexture cameraRenderTexture = new RenderTexture(configLoader.Config.imageWidth, configLoader.Config.imageHeight, 24);
+        vision.targetTexture = cameraRenderTexture;
         _camTexture = new Texture2D(vision.pixelWidth, vision.pixelHeight, TextureFormat.RGB24, false);
         _textureRect = new Rect(0, 0, vision.pixelWidth, vision.pixelHeight);
 
@@ -162,7 +164,11 @@ public class VisonCapture : MonoBehaviour
         if (Random.Range(0, 100) <= configLoader.Config.grainQuantityPercent)
         {
             _grain.enabled.Override(true);
-            _grain.colored.Override(false);
+            if (Random.Range(0, 100) <= configLoader.Config.coloredGrainQuantityPercent) {
+                _grain.colored.Override(true);
+            } else {
+                _grain.colored.Override(false);
+            }
             _grain.intensity.Override(Random.Range(0f, 1f));
             _grain.size.Override(Random.Range(0.3f, 3f));
             _grain.lumContrib.Override(Random.Range(0f, 1f));
@@ -265,8 +271,18 @@ public class VisonCapture : MonoBehaviour
         vision.Render();
         _camTexture.ReadPixels(_textureRect, 0, 0);
         _camTexture.Apply();
-        
-        byte[] imageBytes = _camTexture.EncodeToPNG();
+        byte[] imageBytes;
+        if (blackScreenState)
+        {
+            Texture2D cleanedImage = CreateRedZone(_camTexture, configLoader.Config.maxLineHoleRadius);
+            ReplaceNonMatchingColor(cleanedImage, Color.red, Color.white);
+            ReplaceNonMatchingColor(cleanedImage, Color.white, Color.black);
+            imageBytes = cleanedImage.EncodeToPNG();
+        }
+        else
+        {
+            imageBytes = _camTexture.EncodeToPNG();
+        }
         File.WriteAllBytes(Path.Combine(_datasetDirectory,configLoader.Config.versionDirectory, subPath, $"{_posIndex + _existingFiles}.png"), imageBytes);
     }
 
@@ -322,5 +338,107 @@ public class VisonCapture : MonoBehaviour
                 track.SetActive(false);
             }
         }
+    }
+    
+    private Texture2D CreateRedZone(Texture2D inputTexture, int holeRadius)
+    {
+        // Create a new texture with the same dimensions
+        Texture2D outputTexture = new Texture2D(inputTexture.width, inputTexture.height);
+        outputTexture.filterMode = FilterMode.Point;
+
+        // Copy input texture colors
+        Color[] pixels = inputTexture.GetPixels();
+        outputTexture.SetPixels(pixels);
+
+        // Find starting point at bottom center
+        int startX = inputTexture.width / 2;
+        int startY = 0;
+
+        // Check if starting point is valid (not on a white line)
+        if (outputTexture.GetPixel(startX, startY).r > 0.5f) // White pixel check
+        {
+            Debug.LogWarning("Starting point is on a white line. Cannot proceed.");
+            return outputTexture;
+        }
+
+        // Flood fill queue
+        Queue<Vector2Int> queue = new Queue<Vector2Int>();
+        queue.Enqueue(new Vector2Int(startX, startY));
+
+        // Define red color
+        Color redColor = Color.red;
+
+        // Process flood fill
+        while (queue.Count > 0)
+        {
+            Vector2Int current = queue.Dequeue();
+            int x = current.x;
+            int y = current.y;
+            
+            if (IsSurroundingsOccupied(holeRadius, outputTexture, x, y))
+            {
+                continue;
+            }
+
+            // Set current pixel to red
+            outputTexture.SetPixel(x, y, redColor);
+
+            // Add neighboring pixels to queue
+            queue.Enqueue(new Vector2Int(x + 1, y));
+            queue.Enqueue(new Vector2Int(x - 1, y));
+            queue.Enqueue(new Vector2Int(x, y + 1));
+            queue.Enqueue(new Vector2Int(x, y - 1));
+        }
+
+        // Apply changes
+        outputTexture.Apply();
+        return outputTexture;
+    }
+    
+    private bool IsSurroundingsOccupied(int holeRadius, Texture2D texture, int x, int y) 
+    {
+        if (x < 0 || x >= texture.width || y < 0 || y >= texture.height)
+            return true;
+        if (texture.GetPixel(x, y).r > 0.1f)
+        {
+            return true;
+        }
+
+        for (int i = -holeRadius; i <= holeRadius; i++)
+        {
+            if (x + i < 0 || x + i >= texture.width)
+                continue;
+            for (int j = -holeRadius; j <= holeRadius; j++)
+            {
+                if (y + j < 0 || y + j >= texture.height)
+                    continue;
+                if (texture.GetPixel(x + i, y + j).b > 0.1f)
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+    
+    private void ReplaceNonMatchingColor(Texture2D texture, Color targetColor, Color replacementColor)
+    {
+        // Get all pixels from the texture
+        Color[] pixels = texture.GetPixels();
+
+        // Iterate through all pixels
+        for (int i = 0; i < pixels.Length; i++)
+        {
+            // If the pixel color doesn't match the target color, replace it
+            if (pixels[i] != targetColor)
+            {
+                pixels[i] = replacementColor;
+            }
+        }
+
+        // Apply the modified pixels back to the texture
+        texture.SetPixels(pixels);
+        texture.Apply();
     }
 }
