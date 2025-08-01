@@ -1,5 +1,5 @@
 {
-  "nbImage": 1000,
+  "nbImage": 10,
   "rotationRange": 70,
   "imageWidth": 256,
   "imageHeight": 256,
@@ -9,8 +9,8 @@
     "max": 3
   },
   "cameraAngleRange": {
-    "min": 20,
-    "max": 30
+    "min": 5,
+    "max": 20
   },
   "blurQuantityPercent": 0,
   "grainQuantityPercent": 0,
@@ -20,9 +20,8 @@
   "maxShapeDensity": 0,
   "lineWidthMultiplierRange": {
     "min": 0.1,
-    "max": 0.8
+    "max": 0.3
   },
-  "versionDirectory": "0.51",
-  "fixMaskLineWidth": false,
-  "maxLineHoleRadius": 6
+  "versionDirectory": "0.test.2",
+  "fixMaskLineWidth": false
 }

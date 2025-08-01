@@ -57,6 +57,5 @@ public class ConfigLoader : MonoBehaviour
         public Range lineWidthMultiplierRange;
         public string versionDirectory;
         public bool fixMaskLineWidth;
-        public int maxLineHoleRadius;
     }
 }
