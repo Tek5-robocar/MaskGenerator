@@ -1,7 +1,7 @@
 # Tutorial
 
 > **Note**: This tutorial assumes you have some basic knowledge of Unity.  
-> It **does not** explain how to use Unity from scratch, and may be challenging for complete beginners.  
+> It **does not** explain how to use Unity from scratch, and may be challenging for complete beginners.
 
 ### In this tutorial, you will learn how to:
 
@@ -31,14 +31,14 @@ Follow these steps to open the project and install required packages:
 3. Open the project
 4. Load the scene:  
    ![Open scene](open_scene_racingsimulator.png)
-   - Go to the **Assets** folder in the **Project** tab
-   - Open the **Scenes** folder
-   - Double-click on `RacingSimulator.unity`
+    - Go to the **Assets** folder in the **Project** tab
+    - Open the **Scenes** folder
+    - Double-click on `RacingSimulator.unity`
 5. Install required packages via the **Package Manager**  
    ![Open Unity Package Manager](package_manager_unity.png)
 6. Ensure the following packages are installed:
-   - `com.unity.ugui` (Unity UI)
-   - `com.unity.ml-agents` (ML Agents)
+    - `com.unity.ugui` (Unity UI)
+    - `com.unity.ml-agents` (ML Agents)
 
 If everything is set up correctly, you can now run the simulation using the **Play** button.
 

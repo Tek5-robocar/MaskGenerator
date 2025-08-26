@@ -4,8 +4,15 @@
 
 <instance-profile id="hm"
                  name="Help MaskGenerator"
-                 start-page="starter-topic.md">
+                 start-page="Overview_Main.md">
 
-    <toc-element topic="Overview.md"/>
-    <toc-element topic="starter-topic.md"/>
+    <toc-element topic="Overview_Main.md"/>
+    <toc-element toc-title="AI">
+        <toc-element topic="Overview_AI.md"/>
+        <toc-element topic="Tutorial_AI.md"/>
+    </toc-element>
+    <toc-element toc-title="Simulation">
+        <toc-element topic="Overview_Simulation.md"/>
+        <toc-element topic="Tutorial_Simulation.md"/>
+    </toc-element>
 </instance-profile>
