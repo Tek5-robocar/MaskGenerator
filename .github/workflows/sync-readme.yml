@@ -1,0 +1,32 @@
+name: Sync overview.md to README.md
+
+on:
+  push:
+    paths:
+      - "Writerside/topics/Overview_Main.md"
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Sync overview.md to README.md
+        run: |
+          cp Writerside/topics/Overview_Main.md README.md
+          find README.md -type f -exec sed -i 's|Overview_Simulation|./Writerside/topics/Overview_Simulation|g' {} +
+          find README.md -type f -exec sed -i 's|Overview_AI|./Writerside/topics/Overview_AI|g' {} +
+
+      - name: Commit and push if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          if ! git diff --cached --quiet; then
+            git commit -m "Auto-sync README.md from overview.md"
+            git push
+          else
+            echo "No changes to commit."
+          fi

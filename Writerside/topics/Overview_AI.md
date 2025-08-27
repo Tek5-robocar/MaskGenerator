@@ -22,7 +22,7 @@ By following the tutorial, you’ll learn how to:
 - Train a UNet model for segmentation
 - Evaluate predictions against ground truth masks
 
-> 📘 For step-by-step instructions, follow the [tutorial](Tutorial_UNet.md).  
+> 📘 For step-by-step instructions, follow the [tutorial](Tutorial_AI.md).  
 > 🔄 To see how this integrates with the simulation, check out the [Simulation Overview](Overview_Simulation.md).
 
 ---
