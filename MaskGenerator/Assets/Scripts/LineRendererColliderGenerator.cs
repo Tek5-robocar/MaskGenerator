@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.Rendering;
 
 [RequireComponent(typeof(LineRenderer))]
 public class LineRendererColliderGenerator : MonoBehaviour

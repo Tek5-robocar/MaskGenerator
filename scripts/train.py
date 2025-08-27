@@ -75,13 +75,13 @@ def save(path: str, values: [(str, [])], plot=False):
 def main():
     transform_img = transforms.Compose([
         transforms.Resize((IMG_HEIGHT, IMG_WIDTH)),
-        Pad((0, 6, 0, 6)),
+        # Pad((0, 6, 0, 6)),
         transforms.ToTensor(),
     ])
 
     transform_mask = transforms.Compose([
         transforms.Resize((IMG_HEIGHT, IMG_WIDTH)),
-        Pad((0, 6, 0, 6)),
+        # Pad((0, 6, 0, 6)),
         transforms.ToTensor(),
     ])
 
@@ -91,7 +91,7 @@ def main():
         os.makedirs(os.path.join(MODELS_DIR, VERSION))
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
+    print(f'using {device}')
     if device == "cuda":
         num_workers = torch.cuda.device_count() * 4
     else:
@@ -114,14 +114,13 @@ def testing(device, transform_img, transform_mask):
 
     # model = PolyRegression(num_outputs=1, backbone='resnet34', pretrained=False).to(device)
     # model = FastSCNN(num_classes=1).to(device)
+    # model = UNet().to(device)
     # model = UNet().to(device).half()
     model = EfficientLiteSeg(in_channels=3, out_channels=1).to(device)
     for param in model.parameters():
         print(param.dtype)
     # model = UNet_3Plus(in_channels=3, n_classes=1).to(device)
-    print(f'Does model: {os.path.join(MODELS_DIR, VERSION, f"{MODEL_NAME}.pth")} exist ?')
     if os.path.isfile(os.path.join(MODELS_DIR, VERSION, f'{MODEL_NAME}.pth')):
-        print(f'Loading model: {os.path.join(MODELS_DIR, VERSION, f"{MODEL_NAME}.pth")}')
         model.load_state_dict(torch.load(os.path.join(MODELS_DIR, VERSION, f'{MODEL_NAME}.pth'), weights_only=True))
         print(f'Loaded model: {os.path.join(MODELS_DIR, VERSION, f"{MODEL_NAME}.pth")}')
     display_results(model=model, dataset=dataset, train=True, device=device, sample_count=5)
@@ -153,6 +152,7 @@ def training(device, transform_img, transform_mask, num_workers):
     # model = PolyRegression(num_outputs=1, backbone='resnet34', pretrained=False).to(device)
     # model = FastSCNN(num_classes=1).to(device)
     # model = UNet().to(device).half()
+    # model = UNet().to(device)
     model = EfficientLiteSeg(in_channels=3, out_channels=1).to(device)
     # model = UNet_3Plus(in_channels=3, n_classes=1).to(device)
 
@@ -333,8 +333,8 @@ def plot_training(values: [(str, [])], plot=False):
     plt.grid()
     plt.legend()
 
-    plt.savefig(os.path.join(MODELS_DIR, VERSION, f'{MODEL_NAME}_plot.png'), dpi=300, bbox_inches='tight')
-    with open(os.path.join(MODELS_DIR, VERSION, f'{MODEL_NAME}_plot.plot'), 'wb') as f:
+    plt.savefig(os.path.join(MODELS_DIR, VERSION, f'final_model_plot.png'), dpi=300, bbox_inches='tight')
+    with open(os.path.join(MODELS_DIR, VERSION, f'final_model_plot.plot'), 'wb') as f:
         pickle.dump(fig, f)
     if plot:
         plt.show()
@@ -355,17 +355,17 @@ def handle_interrupt(signal, frame):
 
 
 if __name__ == '__main__':
-    IMG_HEIGHT, IMG_WIDTH = 180, 320
-    BATCH_SIZE = 32
-    EPOCHS = 2
-    LEARNING_RATE = 1e-5
+    IMG_HEIGHT, IMG_WIDTH = 256, 256
+    # IMG_HEIGHT, IMG_WIDTH = 180, 320
+    BATCH_SIZE = 8
+    EPOCHS = 30
+    LEARNING_RATE = 1e-4
     EARLY_STOPPING_PATIENCE = 4
-    VERSION = '0.20'
+    VERSION = '0.39'
     MODEL_NAME = 'final_model'
-    MODELS_DIR = 'models_Unet_fp16'
-    TRAIN = False
+    MODELS_DIR = 'models_EfficientLiteSeg'
+    TRAIN = True
     TEST = True
-    eps = 1e-5
     ignore = True
     average = True
 

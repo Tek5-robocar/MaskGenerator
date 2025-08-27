@@ -48,11 +48,12 @@ public class ConfigLoader : MonoBehaviour
         public Range cameraAngleRange;
         public int blurQuantityPercent;
         public int grainQuantityPercent;
+        public int coloredGrainPercent;
         public int colorGradientQuantityPercent;
         public int shapeQuantityPercent;
         public float maxShapeDensity;
         public Range lineWidthMultiplierRange;
         public string versionDirectory;
-        public bool fixMaskLineWidth;
+        public float fixMaskLineWidth;
     }
 }
